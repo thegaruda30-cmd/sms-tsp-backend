@@ -1410,11 +1410,20 @@ class RequestViewSet(viewsets.ModelViewSet):
         absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
         is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
 
+        absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
+        absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
+
         admin_status_setting = SystemSetting.objects.filter(key='admin_status').first()
         admin_status = admin_status_setting.value.lower() if admin_status_setting else 'online'
 
         is_admin_offline = admin_status in ['offline', 'away']
-        should_absent_approve = is_absent_mode_on
+        
+        should_absent_approve = False
+        if is_absent_mode_on:
+            if absent_mode_type == 'all':
+                should_absent_approve = True
+            elif absent_mode_type == 'specific':
+                should_absent_approve = has_direct_permission
 
         # Check direct send (allow_direct_forwarding) setting
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
@@ -2627,6 +2636,9 @@ class AdminDashboardStatsView(views.APIView):
         absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
         is_absent_mode_on = absent_mode_setting and absent_mode_setting.value.lower() == 'true'
 
+        absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
+        absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
+
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
         is_direct_forward_on = direct_forward_setting and direct_forward_setting.value.lower() == 'true'
 
@@ -2652,6 +2664,7 @@ class AdminDashboardStatsView(views.APIView):
             'auto_approval_mode': is_auto_approve_on,
             'auto_routing_mode': is_auto_routing_on,
             'admin_absent_mode': is_absent_mode_on,
+            'admin_absent_mode_type': absent_mode_type,
             'allow_direct_forwarding': is_direct_forward_on,
             'admin_status': admin_status,
             'admin_mobile_number': admin_mobile_number,
@@ -2733,6 +2746,8 @@ class SystemSettingView(views.APIView):
         admin_status = request.data.get('admin_status')
         admin_mobile_number = request.data.get('admin_mobile_number')
         
+        admin_absent_mode_type = request.data.get('admin_absent_mode_type')
+        
         response_data = {}
         
         if auto_approval is not None:
@@ -2770,6 +2785,18 @@ class SystemSettingView(views.APIView):
                 details=f"Admin Absent Mode set to {admin_absent_mode}"
             )
             response_data["admin_absent_mode"] = setting.value == 'true'
+
+        if admin_absent_mode_type is not None:
+            setting, created = SystemSetting.objects.update_or_create(
+                key='admin_absent_mode_type',
+                defaults={'value': str(admin_absent_mode_type).lower()}
+            )
+            log_activity(
+                "System Settings Updated", 
+                request.user, 
+                details=f"Admin Absent Mode Type set to {admin_absent_mode_type}"
+            )
+            response_data["admin_absent_mode_type"] = setting.value
 
         if allow_direct_forwarding is not None:
             setting, created = SystemSetting.objects.update_or_create(
