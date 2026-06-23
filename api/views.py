@@ -2601,20 +2601,34 @@ class AdminDashboardStatsView(views.APIView):
         poll_incoming_sms_async()
         requests_qs = Request.objects.all()
         
-        # Metrics
-        total_requests = requests_qs.count()
-        pending_requests = requests_qs.filter(status=RequestStatus.PENDING).count()
-        completed_requests = requests_qs.filter(status=RequestStatus.COMPLETED).count()
-        
-        airtel_requests = requests_qs.filter(tsp__code='AIRTEL').count()
-        jio_requests = requests_qs.filter(tsp__code='JIO').count()
-        vodafone_requests = requests_qs.filter(tsp__code='VI').count()
-        bsnl_requests = requests_qs.filter(tsp__code='BSNL').count()
+        # Single database query to aggregate all metrics
+        metrics = requests_qs.aggregate(
+            total=Count('id'),
+            pending=Count('id', filter=Q(status=RequestStatus.PENDING)),
+            completed=Count('id', filter=Q(status=RequestStatus.COMPLETED)),
+            airtel=Count('id', filter=Q(tsp__code='AIRTEL')),
+            jio=Count('id', filter=Q(tsp__code='JIO')),
+            vodafone=Count('id', filter=Q(tsp__code='VI')),
+            bsnl=Count('id', filter=Q(tsp__code='BSNL')),
+            approved=Count('id', filter=Q(status__in=[RequestStatus.FORWARDED, RequestStatus.TSP_RESPONDED, RequestStatus.COMPLETED])),
+            rejected=Count('id', filter=Q(status=RequestStatus.REJECTED)),
+            auto_approved=Count('id', filter=Q(is_auto_approved=True)),
+            direct_tsp=Count('id', filter=Q(is_direct_forwarded=True)),
+            absent_approved=Count('id', filter=Q(is_absent_approved=True))
+        )
 
-        # Keep compatibility with existing stats format
-        approved_requests = requests_qs.filter(status__in=[RequestStatus.FORWARDED, RequestStatus.TSP_RESPONDED, RequestStatus.COMPLETED]).count()
-        rejected_requests = requests_qs.filter(status=RequestStatus.REJECTED).count()
-        auto_approved = requests_qs.filter(is_auto_approved=True).count()
+        total_requests = metrics['total'] or 0
+        pending_requests = metrics['pending'] or 0
+        completed_requests = metrics['completed'] or 0
+        airtel_requests = metrics['airtel'] or 0
+        jio_requests = metrics['jio'] or 0
+        vodafone_requests = metrics['vodafone'] or 0
+        bsnl_requests = metrics['bsnl'] or 0
+        approved_requests = metrics['approved'] or 0
+        rejected_requests = metrics['rejected'] or 0
+        auto_approved = metrics['auto_approved'] or 0
+        direct_tsp_requests = metrics['direct_tsp'] or 0
+        absent_approved_requests = metrics['absent_approved'] or 0
 
         # TSP-wise reports
         tsp_stats = list(requests_qs.values('tsp__name').annotate(count=Count('id')).order_by('-count'))
@@ -2626,31 +2640,19 @@ class AdminDashboardStatsView(views.APIView):
         recent_activities = ActivityLog.objects.all().order_by('-timestamp')[:10]
         recent_activities_data = ActivityLogSerializer(recent_activities, many=True).data
 
-        # System settings
-        auto_approve_setting = SystemSetting.objects.filter(key='auto_approval_mode').first()
-        is_auto_approve_on = auto_approve_setting and auto_approve_setting.value.lower() == 'true'
+        # Single database query to fetch settings
+        settings_dict = {s.key: s.value for s in SystemSetting.objects.filter(key__in=[
+            'auto_approval_mode', 'auto_routing_mode', 'admin_absent_mode',
+            'admin_absent_mode_type', 'allow_direct_forwarding', 'admin_status', 'admin_mobile_number'
+        ])}
 
-        auto_routing_setting = SystemSetting.objects.filter(key='auto_routing_mode').first()
-        is_auto_routing_on = auto_routing_setting.value.lower() == 'true' if auto_routing_setting else False
-
-        absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
-        is_absent_mode_on = absent_mode_setting and absent_mode_setting.value.lower() == 'true'
-
-        absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
-        absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
-
-        direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
-        is_direct_forward_on = direct_forward_setting and direct_forward_setting.value.lower() == 'true'
-
-        admin_status_setting = SystemSetting.objects.filter(key='admin_status').first()
-        admin_status = admin_status_setting.value.lower() if admin_status_setting else 'online'
-
-        admin_mobile_number_setting = SystemSetting.objects.filter(key='admin_mobile_number').first()
-        admin_mobile_number = admin_mobile_number_setting.value if admin_mobile_number_setting else '9844281875'
-        
-        # New counters
-        direct_tsp_requests = requests_qs.filter(is_direct_forwarded=True).count()
-        absent_approved_requests = requests_qs.filter(is_absent_approved=True).count()
+        is_auto_approve_on = settings_dict.get('auto_approval_mode', 'false').lower() == 'true'
+        is_auto_routing_on = settings_dict.get('auto_routing_mode', 'false').lower() == 'true'
+        is_absent_mode_on = settings_dict.get('admin_absent_mode', 'false').lower() == 'true'
+        absent_mode_type = settings_dict.get('admin_absent_mode_type', 'all').lower()
+        is_direct_forward_on = settings_dict.get('allow_direct_forwarding', 'false').lower() == 'true'
+        admin_status = settings_dict.get('admin_status', 'online').lower()
+        admin_mobile_number = settings_dict.get('admin_mobile_number', '9844281875')
 
         return Response({
             'total_requests': total_requests,
