@@ -36,7 +36,7 @@ TEXTBEE_DEVICE_ID = os.environ.get('TEXTBEE_DEVICE_ID', '')
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3samcu@3*%snr)*lwh0k$b$d1b8(m7zu%eln02erf+&6fh4t(o'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-3samcu@3*%snr)*lwh0k$b$d1b8(m7zu%eln02erf+&6fh4t(o')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
@@ -112,11 +112,11 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'HOST': 'db.sargsmajubzlwtwvgyeq.supabase.co',
-            'PORT': 5432,
-            'NAME': 'postgres',
-            'USER': 'postgres',
-            'PASSWORD': 'smsforward@system',
+            'HOST': os.environ.get('SUPABASE_DB_HOST', 'db.sargsmajubzlwtwvgyeq.supabase.co'),
+            'PORT': int(os.environ.get('SUPABASE_DB_PORT', '5432')),
+            'NAME': os.environ.get('SUPABASE_DB_NAME', 'postgres'),
+            'USER': os.environ.get('SUPABASE_DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('SUPABASE_DB_PASSWORD', 'smsforward@system'),
             'OPTIONS': {
                 'sslmode': 'require',
             }
