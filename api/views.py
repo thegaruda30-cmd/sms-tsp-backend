@@ -2727,11 +2727,18 @@ class TSPDashboardStatsView(views.APIView):
         responded_requests = requests_qs.filter(status=RequestStatus.TSP_RESPONDED).count()
         completed_requests = requests_qs.filter(status=RequestStatus.COMPLETED).count()
 
+        direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+        is_direct_messaging_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+
+        admin_user = User.objects.filter(role=UserRole.ADMIN).first()
+
         return Response({
             'assigned_requests': assigned_requests,
             'responded_requests': responded_requests,
             'completed_requests': completed_requests,
-            'tsp_name': request.user.tsp_provider.name
+            'tsp_name': request.user.tsp_provider.name,
+            'allow_direct_messaging': is_direct_messaging_on,
+            'admin_user_id': admin_user.id if admin_user else None,
         })
 
 class SystemSettingView(views.APIView):
