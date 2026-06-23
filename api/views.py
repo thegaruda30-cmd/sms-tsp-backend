@@ -2617,10 +2617,10 @@ class AdminDashboardStatsView(views.APIView):
         auto_approved = requests_qs.filter(is_auto_approved=True).count()
 
         # TSP-wise reports
-        tsp_stats = requests_qs.values('tsp__name').annotate(count=Count('id')).order_by('-count')
+        tsp_stats = list(requests_qs.values('tsp__name').annotate(count=Count('id')).order_by('-count'))
         
         # Officer-wise reports
-        officer_stats = requests_qs.values('officer__username').annotate(count=Count('id')).order_by('-count')
+        officer_stats = list(requests_qs.values('officer__username').annotate(count=Count('id')).order_by('-count'))
 
         # Recent activities
         recent_activities = ActivityLog.objects.all().order_by('-timestamp')[:10]
