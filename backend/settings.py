@@ -113,10 +113,11 @@ else:
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'HOST': os.environ.get('SUPABASE_DB_HOST', 'db.sargsmajubzlwtwvgyeq.supabase.co'),
-            'PORT': int(os.environ.get('SUPABASE_DB_PORT', '5432')),
+            'PORT': int(os.environ.get('SUPABASE_DB_PORT', '6543')),
             'NAME': os.environ.get('SUPABASE_DB_NAME', 'postgres'),
             'USER': os.environ.get('SUPABASE_DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('SUPABASE_DB_PASSWORD', 'smsforward@system'),
+            'CONN_MAX_AGE': 0,
             'OPTIONS': {
                 'sslmode': 'require',
             }

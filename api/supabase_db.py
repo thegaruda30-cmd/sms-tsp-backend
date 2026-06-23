@@ -23,7 +23,7 @@ import uuid as _uuid_mod
 # ── Supabase connection config ───────────────────────────────────────────────
 _DB_CONFIG = dict(
     host=os.environ.get('SUPABASE_DB_HOST', "db.sargsmajubzlwtwvgyeq.supabase.co"),
-    port=int(os.environ.get('SUPABASE_DB_PORT', "5432")),
+    port=int(os.environ.get('SUPABASE_DB_PORT', "6543")),
     dbname=os.environ.get('SUPABASE_DB_NAME', "postgres"),
     user=os.environ.get('SUPABASE_DB_USER', "postgres"),
     password=os.environ.get('SUPABASE_DB_PASSWORD', "smsforward@system"),

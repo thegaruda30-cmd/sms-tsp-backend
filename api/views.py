@@ -2637,7 +2637,7 @@ class AdminDashboardStatsView(views.APIView):
         officer_stats = list(requests_qs.values('officer__username').annotate(count=Count('id')).order_by('-count'))
 
         # Recent activities
-        recent_activities = ActivityLog.objects.all().order_by('-timestamp')[:10]
+        recent_activities = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:10]
         recent_activities_data = ActivityLogSerializer(recent_activities, many=True).data
 
         # Single database query to fetch settings
@@ -2966,7 +2966,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return SystemNotification.objects.filter(user=self.request.user).order_by('-created_at')
+        return SystemNotification.objects.filter(user=self.request.user).order_by('-created_at')[:100]
 
     @action(detail=False, methods=['post'], url_path='mark-all-read')
     def mark_all_read(self, request):
@@ -2978,9 +2978,10 @@ class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.role != UserRole.ADMIN:
-            return ActivityLog.objects.filter(user=self.request.user).order_by('-timestamp')
-        return ActivityLog.objects.all().order_by('-timestamp')
+        user = self.request.user
+        if user.role != UserRole.ADMIN:
+            return ActivityLog.objects.filter(user=user).select_related('user', 'request').order_by('-timestamp')[:100]
+        return ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:100]
 
 # View to download reports
 class ExportReportView(views.APIView):
@@ -3225,7 +3226,7 @@ class ChatMessageViewSet(viewsets.ModelViewSet):
         request_id = self.request.query_params.get('request_id')
         
         # Filter by request if provided
-        qs = ChatMessage.objects.all()
+        qs = ChatMessage.objects.select_related('sender', 'receiver')
         if request_id:
             qs = qs.filter(request_id=request_id)
             
@@ -3416,7 +3417,7 @@ class SMSLogViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == UserRole.ADMIN:
-            return SMSLog.objects.all().order_by('-timestamp')
+            return SMSLog.objects.all().select_related('request').order_by('-timestamp')[:100]
         return SMSLog.objects.none()
 
 
