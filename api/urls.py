@@ -6,7 +6,8 @@ from api.views import (
     SystemSettingView, PermissionViewSet, NotificationViewSet,
     ActivityLogViewSet, ExportReportView, FieldOfficerListView,
     ChatMessageViewSet, DatabaseBrowserView, TSPResponseViewSet, SMSLogViewSet,
-    PollSMSView, TextBeeWebhookView, UserProfileView, TspSettingViewSet
+    PollSMSView, TextBeeWebhookView, UserProfileView, TspSettingViewSet,
+    HealthCheckView
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register('sms-logs', SMSLogViewSet, basename='sms-log')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('health/', HealthCheckView.as_view(), name='health'),
     path('login/', CustomAuthToken.as_view(), name='login'),
     path('profile/', UserProfileView.as_view(), name='profile'),
     path('settings/', SystemSettingView.as_view(), name='settings'),

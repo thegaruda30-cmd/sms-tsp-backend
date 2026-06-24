@@ -937,11 +937,6 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             details=f"TSP sent SMS from {sender}. Content: {message[:100]}"
         )
 
-        notify_admins(
-            "TSP SMS Response Received (Auto)",
-            f"TSP {tsp_provider.name} sent an SMS response for request #{req.id} (Mobile: {req.mobile_number})."
-        )
-
         # Notify admins that TSP has responded so they can review it
         notify_admins(
             "📩 TSP SMS Response Received — Action Required",
@@ -1350,25 +1345,12 @@ class RequestViewSet(viewsets.ModelViewSet):
         ).order_by('-created_at')
 
         if user.role == UserRole.ADMIN:
-            # Poll asynchronously so we don't block the request thread
-            try:
-                poll_incoming_sms_async()
-            except Exception:
-                pass
+            # Background poller (apps.py) handles SMS polling every 15 sec
+            # Do NOT call poll_incoming_sms_async() here — it causes duplicates
             return qs
         elif user.role == UserRole.OFFICER:
-            # Poll asynchronously so we don't block the request thread
-            try:
-                poll_incoming_sms_async()
-            except Exception:
-                pass
             return qs.filter(officer=user)
         elif user.role == UserRole.TSP:
-            # Poll asynchronously so we don't block the request thread
-            try:
-                poll_incoming_sms_async()
-            except Exception:
-                pass
             # Show requests forwarded to their TSP
             if user.tsp_provider:
                 return qs.filter(
@@ -1736,7 +1718,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                         pass
 
             import threading
-            threading.Thread(target=_bg_approve, daemon=True).start()
+            from django.db import transaction
+            transaction.on_commit(lambda: threading.Thread(target=_bg_approve, daemon=True).start())
 
         elif action_type == 'REJECT':
             req.status = RequestStatus.REJECTED
@@ -1796,7 +1779,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                         pass
 
             import threading
-            threading.Thread(target=_bg_reject, daemon=True).start()
+            from django.db import transaction
+            transaction.on_commit(lambda: threading.Thread(target=_bg_reject, daemon=True).start())
         else:
             return Response({"detail": "Invalid action. Use 'APPROVE' or 'REJECT'."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1900,7 +1884,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_forward, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_forward, daemon=True).start())
         
         return Response(RequestSerializer(req).data)
 
@@ -1957,7 +1942,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_accept, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_accept, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
 
@@ -2014,7 +2000,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_reject, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_reject, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
 
@@ -2236,7 +2223,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_respond, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_respond, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
 
@@ -2347,7 +2335,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_complete, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_complete, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
 
@@ -2391,7 +2380,8 @@ class RequestViewSet(viewsets.ModelViewSet):
                     pass
 
         import threading
-        threading.Thread(target=_bg_close, daemon=True).start()
+        from django.db import transaction
+        transaction.on_commit(lambda: threading.Thread(target=_bg_close, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
 
@@ -3344,10 +3334,7 @@ class TSPResponseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == UserRole.ADMIN:
-            try:
-                poll_incoming_sms_async()
-            except Exception:
-                pass
+            # Background poller handles SMS polling — no need to trigger here
             return TSPResponse.objects.all().order_by('-created_at')
         elif user.role == UserRole.TSP:
             if user.tsp_provider:
@@ -3631,3 +3618,14 @@ class TextBeeWebhookView(views.APIView):
         except Exception as e:
             print(f"[TEXTBEE WEBHOOK] Error processing SMS {sms_id}: {e}")
             return Response({"detail": f"Error: {str(e)}"}, status=200)  # Return 200 so TextBee doesn't retry
+
+
+class HealthCheckView(views.APIView):
+    """
+    Public health check endpoint.
+    Used by the client to ping candidates and wake up the server.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)

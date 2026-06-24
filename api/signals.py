@@ -71,4 +71,5 @@ def on_user_logged_in(sender, request, user, **kwargs):
             except Exception:
                 pass
 
-    threading.Thread(target=_run_login_tasks, daemon=True).start()
+    from django.db import transaction
+    transaction.on_commit(lambda: threading.Thread(target=_run_login_tasks, daemon=True).start())
