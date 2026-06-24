@@ -90,7 +90,7 @@ class Request(models.Model):
 
     @property
     def tsp_response(self):
-        resps = list(self.tsp_responses.all())
+        resps = list(self.tsp_responses.order_by('-id'))
         return resps[0] if resps else None
 
     def __str__(self):

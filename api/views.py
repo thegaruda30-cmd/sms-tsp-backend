@@ -653,23 +653,20 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             parsed_notes  = _parsed['additional_notes']
             parsed_date   = _parsed['activation_date']
 
-            admin_user = User.objects.filter(role=UserRole.ADMIN).first()
-            resp, created = TSPResponse.objects.update_or_create(
+            resp = TSPResponse.objects.create(
                 request=req,
-                defaults={
-                    'details': message,
-                    'submitted_by': admin_user,
-                    'created_by': admin_user,
-                    'timestamp': timezone.now(),
-                    'mobile_number': req.mobile_number,
-                    'tsp_provider': tsp_provider.name,
-                    'status': 'Sent to Officer' if req.status == RequestStatus.COMPLETED else 'Received',
-                    'response_date': timezone.now(),
-                    'subscriber_status': parsed_status,
-                    'circle': parsed_circle,
-                    'activation_date': parsed_date,
-                    'additional_notes': parsed_notes or f"Late SMS from {sender}"
-                }
+                details=message,
+                submitted_by=admin_user,
+                created_by=admin_user,
+                timestamp=timezone.now(),
+                mobile_number=req.mobile_number,
+                tsp_provider=tsp_provider.name,
+                status='Sent to Officer' if req.status == RequestStatus.COMPLETED else 'Received',
+                response_date=timezone.now(),
+                subscriber_status=parsed_status,
+                circle=parsed_circle,
+                activation_date=parsed_date,
+                additional_notes=parsed_notes or f"Late SMS from {sender}"
             )
             save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
 
@@ -681,7 +678,11 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     f"Activation Date: {parsed_date.strftime('%Y-%m-%d') if parsed_date else 'N/A'}\n"
                     f"Additional Notes: {parsed_notes or 'None'}"
                 )
-                req.response = message
+                if req.response:
+                    if message not in req.response:
+                        req.response = f"{req.response}\n\n[Late Response]: {message}"
+                else:
+                    req.response = message
                 req.response_date = timezone.now()
                 req.save()
                 save_request_to_file(req.id, RequestSerializer(req).data)
@@ -742,22 +743,20 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         admin_user = User.objects.filter(role=UserRole.ADMIN).first()
         
         # Save/update TSPResponse for acknowledgment messages
-        resp, created = TSPResponse.objects.update_or_create(
+        resp = TSPResponse.objects.create(
             request=req,
-            defaults={
-                'details': message,
-                'submitted_by': admin_user,
-                'created_by': admin_user,
-                'timestamp': timezone.now(),
-                'mobile_number': req.mobile_number,
-                'tsp_provider': tsp_provider.name,
-                'status': 'Received',
-                'response_date': timezone.now(),
-                'subscriber_status': 'Under Process',
-                'circle': '',
-                'activation_date': None,
-                'additional_notes': f"Auto-processed SMS from {sender}"
-            }
+            details=message,
+            submitted_by=admin_user,
+            created_by=admin_user,
+            timestamp=timezone.now(),
+            mobile_number=req.mobile_number,
+            tsp_provider=tsp_provider.name,
+            status='Received',
+            response_date=timezone.now(),
+            subscriber_status='Under Process',
+            circle='',
+            activation_date=None,
+            additional_notes=f"Auto-processed SMS from {sender}"
         )
         save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
 
@@ -816,14 +815,17 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
     )
 
     # Save parsed/original details to Request
-    if req.is_absent_approved:
+    if req.response:
+        if message not in req.response:
+            req.response = f"{req.response}\n\n[Additional Response]: {message}"
+    else:
         req.response = message
-        req.response_date = timezone.now()
+    req.response_date = timezone.now()
+
+    if req.is_absent_approved:
         req.status = RequestStatus.COMPLETED
         req.admin_status = 'Completed'
     else:
-        req.response = message
-        req.response_date = timezone.now()
         req.status = RequestStatus.TSP_RESPONDED
         req.admin_status = 'SMS Response Received'
     
@@ -846,24 +848,23 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
     # Save/update TSPResponse
     admin_user = User.objects.filter(role=UserRole.ADMIN).first()
     try:
-        resp, created = TSPResponse.objects.update_or_create(
+        resp = TSPResponse.objects.create(
             request=req,
-            defaults={
-                'details': message,
-                'submitted_by': admin_user,
-                'created_by': admin_user,
-                'timestamp': timezone.now(),
-                'mobile_number': req.mobile_number,
-                'tsp_provider': tsp_provider.name,
-                'status': 'Sent to Officer' if req.is_absent_approved else 'Received',
-                'response_date': timezone.now(),
-                'subscriber_status': parsed_status,
-                'circle': parsed_circle,
-                'activation_date': parsed_date,
-                'additional_notes': parsed_notes or f"Auto-processed SMS from {sender}"
-            }
+            details=message,
+            submitted_by=admin_user,
+            created_by=admin_user,
+            timestamp=timezone.now(),
+            mobile_number=req.mobile_number,
+            tsp_provider=tsp_provider.name,
+            status='Sent to Officer' if req.is_absent_approved else 'Received',
+            response_date=timezone.now(),
+            subscriber_status=parsed_status,
+            circle=parsed_circle,
+            activation_date=parsed_date,
+            additional_notes=parsed_notes or f"Auto-processed SMS from {sender}"
         )
-        action = 'CREATED' if created else 'UPDATED'
+        created = True
+        action = 'CREATED'
         print(f"[TSP RESPONSE] DB INSERT {action} SUCCESS: id={resp.id} request={req.id} tsp={tsp_provider.name} status={parsed_status}")
         save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
     except Exception as _db_err:
@@ -2044,7 +2045,11 @@ class RequestViewSet(viewsets.ModelViewSet):
         is_ack = is_acknowledgment_message(details)
 
         # Update Request fields
-        req.response = details
+        if req.response:
+            if details not in req.response:
+                req.response = f"{req.response}\n\n[Additional Response]: {details}"
+        else:
+            req.response = details
         req.response_date = timezone.now()
         
         # Guard: prevent TSP from reverting already-completed/closed requests, but still record their response details.
@@ -2083,22 +2088,20 @@ class RequestViewSet(viewsets.ModelViewSet):
         else:
             response_status = 'Received'
 
-        resp, created = TSPResponse.objects.update_or_create(
+        resp = TSPResponse.objects.create(
             request=req,
-            defaults={
-                'details': details,
-                'submitted_by': request.user,
-                'created_by': request.user,
-                'timestamp': timezone.now(),
-                'mobile_number': req.mobile_number,
-                'tsp_provider': req.tsp.name,
-                'status': response_status,
-                'response_date': timezone.now(),
-                'subscriber_status': parsed_status,
-                'circle': parsed_circle,
-                'activation_date': parsed_date,
-                'additional_notes': parsed_notes,
-            }
+            details=details,
+            submitted_by=request.user,
+            created_by=request.user,
+            timestamp=timezone.now(),
+            mobile_number=req.mobile_number,
+            tsp_provider=req.tsp.name,
+            status=response_status,
+            response_date=timezone.now(),
+            subscriber_status=parsed_status,
+            circle=parsed_circle,
+            activation_date=parsed_date,
+            additional_notes=parsed_notes,
         )
         save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
 
@@ -2515,7 +2518,11 @@ class RequestViewSet(viewsets.ModelViewSet):
         #     return Response(RequestSerializer(req).data)
 
         # Update request with the SMS response
-        req.response = sms_body
+        if req.response:
+            if sms_body not in req.response:
+                req.response = f"{req.response}\n\n[Additional Response]: {sms_body}"
+        else:
+            req.response = sms_body
         req.response_date = timezone.now()
         is_completed_or_closed = req.status in [RequestStatus.COMPLETED, RequestStatus.CLOSED]
         if not is_completed_or_closed:
@@ -2541,22 +2548,20 @@ class RequestViewSet(viewsets.ModelViewSet):
 
         response_status = 'Sent to Officer' if is_completed_or_closed else 'Received'
 
-        resp, created = TSPResponse.objects.update_or_create(
+        resp = TSPResponse.objects.create(
             request=req,
-            defaults={
-                'details': sms_body,
-                'submitted_by': request.user,
-                'created_by': request.user,
-                'timestamp': timezone.now(),
-                'mobile_number': req.mobile_number,
-                'tsp_provider': req.tsp.name,
-                'status': response_status,
-                'response_date': timezone.now(),
-                'subscriber_status': parsed_status,
-                'circle': parsed_circle,
-                'activation_date': parsed_date,
-                'additional_notes': parsed_notes,
-            }
+            details=sms_body,
+            submitted_by=request.user,
+            created_by=request.user,
+            timestamp=timezone.now(),
+            mobile_number=req.mobile_number,
+            tsp_provider=req.tsp.name,
+            status=response_status,
+            response_date=timezone.now(),
+            subscriber_status=parsed_status,
+            circle=parsed_circle,
+            activation_date=parsed_date,
+            additional_notes=parsed_notes,
         )
         save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
 
@@ -3356,7 +3361,11 @@ class TSPResponseViewSet(viewsets.ModelViewSet):
 
             req.status = RequestStatus.COMPLETED
             req.admin_status = 'Completed'
-            req.response = resp.details
+            if req.response:
+                if resp.details not in req.response:
+                    req.response = f"{req.response}\n\n[Update]: {resp.details}"
+            else:
+                req.response = resp.details
             req.response_date = timezone.now()
             req.save()
 
