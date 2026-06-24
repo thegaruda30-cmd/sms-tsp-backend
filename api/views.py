@@ -2742,7 +2742,48 @@ class UserProfileView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response(UserSerializer(request.user).data)
+        data = UserSerializer(request.user).data
+        if request.user.role == UserRole.ADMIN:
+            setting = SystemSetting.objects.filter(key='admin_mobile_number').first()
+            data['phone_number'] = setting.value if setting else '9844281875'
+        return Response(data)
+
+    def put(self, request):
+        user = request.user
+        username = request.data.get('username')
+        password = request.data.get('password')
+        phone_number = request.data.get('phone_number')
+
+        if username:
+            username = username.strip()
+            if User.objects.filter(username=username).exclude(pk=user.pk).exists():
+                return Response({"detail": "Username already taken"}, status=status.HTTP_400_BAD_REQUEST)
+            user.username = username
+
+        if password:
+            user.set_password(password)
+
+        user.save()
+
+        if user.role == UserRole.ADMIN and phone_number is not None:
+            SystemSetting.objects.update_or_create(
+                key='admin_mobile_number',
+                defaults={'value': str(phone_number).strip()}
+            )
+
+        data = UserSerializer(user).data
+        if user.role == UserRole.ADMIN:
+            setting = SystemSetting.objects.filter(key='admin_mobile_number').first()
+            data['phone_number'] = setting.value if setting else '9844281875'
+
+        # Log profile update activity
+        log_activity(
+            "Profile Updated",
+            user,
+            details=f"Updated profile details. Username: {user.username}"
+        )
+
+        return Response(data)
 
 class TSPDashboardStatsView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]

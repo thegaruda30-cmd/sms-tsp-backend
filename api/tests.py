@@ -355,5 +355,32 @@ class SMSSystemTests(APITestCase):
         sms_msg_lower, _ = build_tsp_forward_sms(req)
         self.assertEqual(sms_msg_lower, "Trace 6383836472 immediately.")
 
+    def test_get_and_update_profile(self):
+        # 1. Test GET request
+        self.client.force_authenticate(user=self.admin)
+        url = reverse('profile')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], self.admin.username)
+        # Check phone number is returned for admin (defaults to 9844281875 if setting missing)
+        self.assertEqual(response.data['phone_number'], '9844281875')
+
+        # 2. Test PUT request to update profile details
+        data = {
+            'username': 'admin_updated',
+            'phone_number': '1234567890',
+            'password': 'newpassword123'
+        }
+        response = self.client.put(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], 'admin_updated')
+        self.assertEqual(response.data['phone_number'], '1234567890')
+
+        # Verify database got updated
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.username, 'admin_updated')
+        self.admin.check_password('newpassword123')
+
+
 
 
