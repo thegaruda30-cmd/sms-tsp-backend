@@ -146,8 +146,9 @@ def is_acknowledgment_message(message):
         return True
 
     # Short messages (<=20 chars after stripping) with no subscriber data are acks
-    if len(text_only) <= 20 and not has_subscriber_data:
-        return True
+    # (Disabled because short subscriber data like cell IDs e.g. "lp5757" do not have subscriber keywords but are final replies)
+    # if len(text_only) <= 20 and not has_subscriber_data:
+    #     return True
 
     # --- Strong, multi-word ack phrases that are unambiguous ---
     strong_ack_phrases = [
@@ -497,6 +498,8 @@ def is_promotional_or_spam_sms(message: str) -> bool:
 def process_single_received_sms(sms_id, sender, message, received_at_str):
 
     import re
+    from api.models import User, UserRole
+    admin_user = User.objects.filter(role=UserRole.ADMIN).first()
 
     # Filter to only allow SMS from active TSP numbers
     sender_clean = normalize_phone(sender)
@@ -531,7 +534,9 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
 
     # 2. Match by customer phone number in the message
     if not req:
-        phone_matches = re.findall(r'\b\d{10}\b', message)
+        # Extract sequences of 10 to 12 digits, and extract the last 10 digits of each sequence
+        raw_matches = re.findall(r'\d{10,12}', message)
+        phone_matches = [p[-10:] for p in raw_matches]
         if phone_matches:
             sender_clean = normalize_phone(sender)
             matching_tsps = []
@@ -562,7 +567,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                         mobile_number=phone,
                         tsp__in=matching_tsps,
                         status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING]
-                    ).first()
+                    ).order_by('-forwarded_at', '-created_at').first()
                     if req_candidate:
                         req = req_candidate
                         break
@@ -570,7 +575,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     req_candidate = Request.objects.filter(
                         mobile_number=phone,
                         tsp__in=matching_tsps
-                    ).first()
+                    ).order_by('-forwarded_at', '-created_at').first()
                     if req_candidate:
                         req = req_candidate
                         break
@@ -579,19 +584,21 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     req_candidate = Request.objects.filter(
                         mobile_number=phone,
                         status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING]
-                    ).first()
+                    ).order_by('-forwarded_at', '-created_at').first()
                     if req_candidate:
                         req = req_candidate
                         break
                     
                     req_candidate = Request.objects.filter(
                         mobile_number=phone
-                    ).first()
+                    ).order_by('-forwarded_at', '-created_at').first()
                     if req_candidate:
                         req = req_candidate
                         break
 
-    # 3. Fallback: Most recent FORWARDED/PROCESSING request matching sender phone number
+    # 3. Fallback: Most recent active request matching sender TSP phone number.
+    # FIX: Search ALL non-closed/non-rejected statuses — not just FORWARDED/PROCESSING.
+    # Previously, replies arriving after an ack (PROCESSING state) were silently discarded.
     if not req:
         sender_clean = normalize_phone(sender)
         matching_tsps = []
@@ -617,10 +624,25 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                 matching_tsps = [t for t in matching_tsps if t.code.upper() == op]
 
         if matching_tsps:
+            # First try active/in-progress statuses
+            _active_statuses = [
+                RequestStatus.FORWARDED,
+                RequestStatus.PROCESSING,
+                RequestStatus.PENDING,
+                RequestStatus.TSP_RESPONDED,
+            ]
             req = Request.objects.filter(
                 tsp__in=matching_tsps,
-                status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING]
-            ).order_by('-forwarded_at').first()
+                status__in=_active_statuses
+            ).order_by('-forwarded_at', '-created_at').first()
+
+            # If still no match, try ANY non-closed/non-rejected request for this TSP
+            if not req:
+                req = Request.objects.filter(
+                    tsp__in=matching_tsps
+                ).exclude(
+                    status__in=[RequestStatus.CLOSED, RequestStatus.REJECTED]
+                ).order_by('-forwarded_at', '-created_at').first()
 
     if not req:
         # Discard unmatched SMS - not required
@@ -1025,8 +1047,8 @@ def poll_incoming_sms():
         return
     global LAST_POLL_TIME
     current_time = time.time()
-    # Cache poll requests for 10 seconds to avoid overloading API
-    if current_time - LAST_POLL_TIME < 10:
+    # Cache poll requests for 5 seconds to avoid overloading API (was 10s)
+    if current_time - LAST_POLL_TIME < 5:
         return
     LAST_POLL_TIME = current_time
 
@@ -2069,6 +2091,34 @@ class RequestViewSet(viewsets.ModelViewSet):
         # Check if this is an acknowledgment
         is_ack = is_acknowledgment_message(details)
 
+        # Check current system settings dynamically at response time
+        from api.models import SystemSetting, PermissionSetting
+        absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
+        is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
+
+        direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+        is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+
+        has_direct_permission = False
+        try:
+            perm = PermissionSetting.objects.get(officer=req.officer)
+            has_direct_permission = perm.direct_forward_allowed
+        except Exception:
+            pass
+
+        should_auto_complete = (
+            req.is_absent_approved or 
+            req.is_direct_forwarded or 
+            req.is_auto_approved or 
+            is_absent_mode_on or 
+            is_direct_forward_on or 
+            has_direct_permission
+        )
+
+        flow_title = "Direct Forward Mode" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Mode"
+        flow_remarks = "Direct Forward Auto-Flow" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Auto-Flow"
+        flow_details = "direct-forwarded" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "absent-approved"
+
         # Update Request fields
         if req.response:
             if details not in req.response:
@@ -2078,21 +2128,17 @@ class RequestViewSet(viewsets.ModelViewSet):
         req.response_date = timezone.now()
         
         # Guard: prevent TSP from reverting already-completed/closed requests, but still record their response details.
-        absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
-        is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
-
         if req.status not in [RequestStatus.COMPLETED, RequestStatus.CLOSED]:
             if is_ack:
                 req.status = RequestStatus.PROCESSING
                 req.admin_status = 'Acknowledgment Received'
             else:
-                if is_absent_mode_on:
+                if should_auto_complete:
                     req.status = RequestStatus.COMPLETED
                     req.admin_status = 'Completed & Sent to Officer'
                     req.response_date = timezone.now()
                 else:
                     # FIX: Set to TSP_RESPONDED so admin can review & forward.
-                    # Do NOT jump to COMPLETED/Sent-to-Officer — that bypasses admin review.
                     req.status = RequestStatus.TSP_RESPONDED
                     req.admin_status = 'SMS Response Received'
         if notes:
@@ -2106,12 +2152,14 @@ class RequestViewSet(viewsets.ModelViewSet):
         parsed_notes  = notes or _parsed['additional_notes']
         parsed_date   = _parsed['activation_date']
 
-        # FIX: Always set 'Received' for non-ack responses so admin sees them in TSP Replies panel.
-        # Only previously-completed/closed requests get 'Sent to Officer' (they skip admin review).
-        if req.status in [RequestStatus.COMPLETED, RequestStatus.CLOSED] or is_absent_mode_on:
-            response_status = 'Sent to Officer'
+        # Determine response status
+        if is_ack:
+            response_status = 'Sent to Officer' if should_auto_complete else 'Received'
         else:
-            response_status = 'Received'
+            if req.status in [RequestStatus.COMPLETED, RequestStatus.CLOSED] or should_auto_complete:
+                response_status = 'Sent to Officer'
+            else:
+                response_status = 'Received'
 
         resp = TSPResponse.objects.create(
             request=req,
@@ -2164,9 +2212,9 @@ class RequestViewSet(viewsets.ModelViewSet):
                 # Send chat message notification to ADMIN or OFFICER
                 admin_user = User.objects.filter(role=UserRole.ADMIN).first()
                 if not is_ack:
-                    if is_absent_mode_on:
+                    if should_auto_complete:
                         msg_text = (
-                            f"📥 **TSP Response Received (Absent Mode — Sent to Officer)** 📥\n"
+                            f"📥 **TSP Response Received ({flow_title} — Sent to Officer)** 📥\n"
                             f"📱 **Mobile:** {req.mobile_number}\n"
                             f"📶 **TSP:** {req.tsp.name}\n"
                             f"📋 **Subscriber Status:** {parsed_status}\n"
@@ -2240,12 +2288,12 @@ class RequestViewSet(viewsets.ModelViewSet):
                         new_status="Forwarded_To_TSP",
                     )
                 else:
-                    if is_absent_mode_on:
+                    if should_auto_complete:
                         admin_user = User.objects.filter(role=UserRole.ADMIN).first()
                         async_save_admin_forward_response(req, resp, admin_user)
                         async_log_status(
                             req, request.user,
-                            action_type="TSP Response Received (Absent Mode — Sent to Officer)",
+                            action_type=f"TSP Response Received ({flow_title} — Sent to Officer)",
                             details=f"TSP submitted response: {details[:120]}",
                             old_status="Forwarded_To_TSP",
                             new_status="Forwarded_To_Officer",
@@ -2272,6 +2320,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         transaction.on_commit(lambda: threading.Thread(target=_bg_respond, daemon=True).start())
 
         return Response(RequestSerializer(req).data)
+
 
     @action(detail=True, methods=['post'], url_path='admin-complete')
     def admin_complete(self, request, pk=None):
@@ -2545,6 +2594,30 @@ class RequestViewSet(viewsets.ModelViewSet):
         # 
         #     return Response(RequestSerializer(req).data)
 
+        # Check current system settings dynamically at response receipt time
+        from api.models import SystemSetting, PermissionSetting
+        absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
+        is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
+
+        direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+        is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+
+        has_direct_permission = False
+        try:
+            perm = PermissionSetting.objects.get(officer=req.officer)
+            has_direct_permission = perm.direct_forward_allowed
+        except Exception:
+            pass
+
+        should_auto_complete = (
+            req.is_absent_approved or 
+            req.is_direct_forwarded or 
+            req.is_auto_approved or 
+            is_absent_mode_on or 
+            is_direct_forward_on or 
+            has_direct_permission
+        )
+
         # Update request with the SMS response
         if req.response:
             if sms_body not in req.response:
@@ -2553,9 +2626,14 @@ class RequestViewSet(viewsets.ModelViewSet):
             req.response = sms_body
         req.response_date = timezone.now()
         is_completed_or_closed = req.status in [RequestStatus.COMPLETED, RequestStatus.CLOSED]
+        
         if not is_completed_or_closed:
-            req.status = RequestStatus.TSP_RESPONDED
-            req.admin_status = 'SMS Response Received'
+            if should_auto_complete:
+                req.status = RequestStatus.COMPLETED
+                req.admin_status = 'Completed'
+            else:
+                req.status = RequestStatus.TSP_RESPONDED
+                req.admin_status = 'SMS Response Received'
         req.save()
 
         # Create SMS Log — direction RECEIVED
@@ -2574,7 +2652,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         parsed_notes  = _parsed['additional_notes']
         parsed_date   = _parsed['activation_date']
 
-        response_status = 'Sent to Officer' if is_completed_or_closed else 'Received'
+        response_status = 'Sent to Officer' if (is_completed_or_closed or should_auto_complete) else 'Received'
 
         resp = TSPResponse.objects.create(
             request=req,
@@ -2593,58 +2671,121 @@ class RequestViewSet(viewsets.ModelViewSet):
         )
         save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
 
-        RequestStatusLog.objects.create(
-            request=req,
-            status=RequestStatus.TSP_RESPONDED,
-            changed_by=request.user,
-            remarks=f"Inbound SMS response received from {from_number} on number {inbound_number}."
+        formatted_details = (
+            f"Subscriber Status: {parsed_status}\n"
+            f"Circle/State: {parsed_circle}\n"
+            f"Activation Date: {parsed_date.strftime('%Y-%m-%d') if parsed_date else 'N/A'}\n"
+            f"Additional Notes: {parsed_notes or 'None'}"
         )
 
-        log_activity(
-            "Inbound TSP SMS Response",
-            request.user,
-            request=req,
-            details=f"TSP sent SMS from {from_number} to inbound number {inbound_number}. Content: {sms_body[:100]}"
-        )
+        if should_auto_complete and not is_completed_or_closed:
+            flow_title = "Direct Forward Mode" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Mode"
+            flow_remarks = "Direct Forward Auto-Flow" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Auto-Flow"
+            flow_details = "direct-forwarded" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "absent-approved"
 
-        # Notify admins
-        notify_admins(
-            "TSP SMS Response Received",
-            f"TSP {req.tsp.name} sent an SMS response for request #{req.id} (Mobile: {req.mobile_number})."
-        )
+            RequestStatusLog.objects.create(
+                request=req,
+                status=RequestStatus.COMPLETED,
+                changed_by=request.user,
+                remarks=f"Inbound SMS response automatically completed ({flow_remarks}) matching request #{req.id}."
+            )
 
-        # Chat message
-        admin_user = User.objects.filter(role=UserRole.ADMIN).first()
-        msg_text = (
-            f"📩 **Inbound TSP SMS Response** 📩\n"
-            f"TSP: **{req.tsp.name}**\n"
-            f"From Number: {from_number or 'Unknown'}\n"
-            f"To Inbound Number: {inbound_number or req.tsp.inbound_number or 'Configured Inbound'}\n\n"
-            f"SMS Content:\n{sms_body}"
-        )
-        chat_msg = ChatMessage.objects.create(
-            sender=admin_user or request.user,
-            receiver=req.officer,
-            request=req,
-            message=msg_text
-        )
-        save_chat_to_file(chat_msg.id, ChatMessageSerializer(chat_msg).data)
-        save_request_to_file(req.id, RequestSerializer(req).data)
+            log_activity(
+                "Auto Inbound TSP SMS Response Completed",
+                request.user,
+                request=req,
+                details=f"TSP response auto-forwarded to officer because request was {flow_details}. Content: {sms_body[:100]}"
+            )
 
-        # ── Mirror to Supabase ───────────────────────────────────────────────
-        async_sync_user(request.user)
-        async_save_request(req)
-        async_save_tsp_response(req, resp, None)
-        async_log_status(
-            req, request.user,
-            action_type="TSP Response Submitted (SMS)",
-            details=f"Inbound SMS response: '{sms_body[:120]}'",
-            old_status="Forwarded_To_TSP",
-            new_status="Response_Received_From_TSP",
-        )
-        # ────────────────────────────────────────────────────────────────────
+            create_notification(
+                req.officer,
+                f"TSP Request Completed ({flow_title})",
+                f"TSP response for request #{req.id} ({req.mobile_number}) has been auto-completed: {req.response}"
+            )
+
+            # Send chat message to officer
+            response_summary = (
+                f"✅ **TSP Response Auto-Forwarded ({flow_title})** ✅\n"
+                f"📱 **Mobile:** {req.mobile_number}\n"
+                f"📶 **TSP:** {req.tsp.name}\n"
+                f"📋 **Subscriber Status:** {parsed_status}\n"
+                f"📍 **Circle/State:** {parsed_circle or 'N/A'}\n"
+                f"📅 **Activation Date:** {parsed_date.strftime('%Y-%m-%d') if parsed_date else 'N/A'}\n"
+                f"📩 **Full Response:** {sms_body}"
+            )
+            chat_msg = ChatMessage.objects.create(
+                sender=request.user,
+                receiver=req.officer,
+                request=req,
+                message=response_summary
+            )
+            save_chat_to_file(chat_msg.id, ChatMessageSerializer(chat_msg).data)
+            save_request_to_file(req.id, RequestSerializer(req).data)
+            
+            # Mirror to Supabase
+            async_sync_user(request.user)
+            async_save_request(req)
+            async_save_admin_forward_response(req, resp, request.user)
+            async_log_status(
+                req, request.user,
+                action_type=f"TSP SMS Response Auto-Forwarded ({flow_title})",
+                details=formatted_details,
+                old_status="Forwarded_To_TSP",
+                new_status="Forwarded_To_Officer",
+            )
+        else:
+            RequestStatusLog.objects.create(
+                request=req,
+                status=RequestStatus.TSP_RESPONDED,
+                changed_by=request.user,
+                remarks=f"Inbound SMS response received from {from_number} on number {inbound_number}."
+            )
+
+            log_activity(
+                "Inbound TSP SMS Response",
+                request.user,
+                request=req,
+                details=f"TSP sent SMS from {from_number} to inbound number {inbound_number}. Content: {sms_body[:100]}"
+            )
+
+            # Notify admins
+            notify_admins(
+                "TSP SMS Response Received",
+                f"TSP {req.tsp.name} sent an SMS response for request #{req.id} (Mobile: {req.mobile_number})."
+            )
+
+            # Chat message
+            admin_user = User.objects.filter(role=UserRole.ADMIN).first()
+            msg_text = (
+                f"📩 **Inbound TSP SMS Response** 📩\n"
+                f"TSP: **{req.tsp.name}**\n"
+                f"From Number: {from_number or 'Unknown'}\n"
+                f"To Inbound Number: {inbound_number or req.tsp.inbound_number or 'Configured Inbound'}\n\n"
+                f"SMS Content:\n{sms_body}"
+            )
+            chat_msg = ChatMessage.objects.create(
+                sender=admin_user or request.user,
+                receiver=req.officer,
+                request=req,
+                message=msg_text
+            )
+            save_chat_to_file(chat_msg.id, ChatMessageSerializer(chat_msg).data)
+            save_request_to_file(req.id, RequestSerializer(req).data)
+
+            # Mirror to Supabase
+            async_sync_user(request.user)
+            async_save_request(req)
+            async_save_tsp_response(req, resp, None)
+            async_log_status(
+                req, request.user,
+                action_type="TSP SMS Response Polled (Auto) — Pending Admin Review",
+                details=f"TSP sent SMS from {from_number}: {sms_body[:100]}",
+                old_status="Forwarded_To_TSP",
+                new_status="Response_Received_From_TSP",
+            )
 
         return Response(RequestSerializer(req).data)
+
 
 class AdminDashboardStatsView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]

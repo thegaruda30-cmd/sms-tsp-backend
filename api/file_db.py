@@ -178,6 +178,15 @@ class ProcessLock:
                 os.mkdir(self.lock_dir)
                 return self
             except FileExistsError:
+                # If the lock directory is stale (older than 10 seconds), delete it to self-heal
+                try:
+                    mtime = os.path.getmtime(self.lock_dir)
+                    if time.time() - mtime > 10:
+                        import shutil
+                        shutil.rmtree(self.lock_dir, ignore_errors=True)
+                        print(f"[ProcessLock] Removed stale lock directory due to age: {self.lock_dir}")
+                except Exception:
+                    pass
                 time.sleep(0.1)
         raise TimeoutError("Could not acquire cross-process lock on processed_sms")
 

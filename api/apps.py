@@ -33,6 +33,17 @@ class ApiConfig(AppConfig):
         from api.views import poll_incoming_sms
         import api.views as api_views
 
+        # Clean up stale cross-process lock on startup to prevent deadlocks after reload
+        try:
+            from api.file_db import DB_BASE_DIR
+            lock_dir = os.path.join(DB_BASE_DIR, 'processed_sms.lock_dir')
+            if os.path.exists(lock_dir):
+                import shutil
+                shutil.rmtree(lock_dir, ignore_errors=True)
+                print("[SMS Poller] Cleaned up stale lock directory on startup.")
+        except Exception:
+            pass
+
         import threading
         import time
 
@@ -61,7 +72,7 @@ class ApiConfig(AppConfig):
                         connections.close_all()
                     except Exception:
                         pass
-                    time.sleep(15)  # Poll every 15 seconds (was 30)
+                    time.sleep(5)  # Poll every 5 seconds (was 15)
 
         poller_thread = threading.Thread(
             target=_background_sms_poller,
@@ -69,5 +80,5 @@ class ApiConfig(AppConfig):
             name="sms-background-poller"
         )
         poller_thread.start()
-        print("[SMS Poller] Background SMS polling started (every 15 seconds).")
+        print("[SMS Poller] Background SMS polling started (every 5 seconds).")
 
