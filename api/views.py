@@ -1343,16 +1343,25 @@ class RequestViewSet(viewsets.ModelViewSet):
         ).order_by('-created_at')
 
         if user.role == UserRole.ADMIN:
-            # Poll asynchronously so admin view doesn't block on network
-            poll_incoming_sms_async()
+            # Poll synchronously so admin gets fresh updates immediately
+            try:
+                poll_incoming_sms()
+            except Exception:
+                pass
             return qs
         elif user.role == UserRole.OFFICER:
-            # Poll asynchronously so officer views also trigger SMS processing
-            poll_incoming_sms_async()
+            # Poll synchronously so officer gets fresh updates immediately
+            try:
+                poll_incoming_sms()
+            except Exception:
+                pass
             return qs.filter(officer=user)
         elif user.role == UserRole.TSP:
-            # Poll asynchronously so TSP views also trigger SMS processing
-            poll_incoming_sms_async()
+            # Poll synchronously so TSP gets fresh updates immediately
+            try:
+                poll_incoming_sms()
+            except Exception:
+                pass
             # Show requests forwarded to their TSP
             if user.tsp_provider:
                 return qs.filter(
@@ -2598,7 +2607,10 @@ class AdminDashboardStatsView(views.APIView):
         if request.user.role != UserRole.ADMIN:
             return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
 
-        poll_incoming_sms_async()
+        try:
+            poll_incoming_sms()
+        except Exception:
+            pass
         requests_qs = Request.objects.all()
         
         # Single database query to aggregate all metrics
@@ -3280,7 +3292,10 @@ class TSPResponseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == UserRole.ADMIN:
-            poll_incoming_sms_async()
+            try:
+                poll_incoming_sms()
+            except Exception:
+                pass
             return TSPResponse.objects.all().order_by('-created_at')
         elif user.role == UserRole.TSP:
             if user.tsp_provider:
