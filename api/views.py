@@ -634,6 +634,22 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
 
     tsp_provider = req.tsp
 
+    # Prevent processing duplicate responses/acknowledgments for the same request
+    from api.models import TSPResponse
+    msg_clean = message.strip()
+    duplicate_exists = False
+    for resp in TSPResponse.objects.filter(request=req):
+        if resp.details.strip() == msg_clean:
+            duplicate_exists = True
+            break
+
+    if duplicate_exists:
+        try:
+            print(f"[TSP RESPONSE] Ignored duplicate SMS response for request #{req.id}: '{message[:80]}'")
+        except Exception:
+            pass
+        return False
+
     # Guard: If request is already completed, closed, or has a response, don't regress or duplicate status
     if req.status in [RequestStatus.TSP_RESPONDED, RequestStatus.COMPLETED, RequestStatus.CLOSED]:
         # Create SMS Log for auditing/archiving
@@ -1006,7 +1022,7 @@ def poll_incoming_sms():
             from api.file_db import try_mark_sms_as_processed
 
             for msg_data in messages:
-                sms_id = msg_data.get('_id')
+                sms_id = msg_data.get('_id') or msg_data.get('id')
                 if not sms_id:
                     continue
 
@@ -3517,7 +3533,7 @@ class PollSMSView(views.APIView):
             ack_count = 0
 
             for msg_data in messages:
-                sms_id = msg_data.get('_id')
+                sms_id = msg_data.get('_id') or msg_data.get('id')
                 if not sms_id:
                     continue
                 sender = msg_data.get('sender', '')

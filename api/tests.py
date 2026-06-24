@@ -381,6 +381,43 @@ class SMSSystemTests(APITestCase):
         self.assertEqual(self.admin.username, 'admin_updated')
         self.admin.check_password('newpassword123')
 
+    def test_process_single_received_sms_deduplication(self):
+        from api.views import process_single_received_sms
+        from api.models import TSPResponse
+
+        # Create a forwarded request
+        req = Request.objects.create(
+            mobile_number="9876500001", tsp=self.jio, reason="Test duplicate check", officer=self.officer, status=RequestStatus.FORWARDED
+        )
+
+        # 1. Process the SMS response for the first time
+        success1 = process_single_received_sms(
+            sms_id="sms_dup_test_1",
+            sender=self.jio.mobile_number,
+            message="Done",
+            received_at_str="2026-06-24T12:00:00Z"
+        )
+        self.assertTrue(success1)
+
+        # Verify exactly one TSPResponse is created
+        responses = TSPResponse.objects.filter(request=req)
+        self.assertEqual(responses.count(), 1)
+        self.assertEqual(responses.first().details, "Done")
+
+        # 2. Process the exact same SMS message again (simulate duplicate webhook/poller run)
+        success2 = process_single_received_sms(
+            sms_id="sms_dup_test_2",
+            sender=self.jio.mobile_number,
+            message="Done",
+            received_at_str="2026-06-24T12:01:00Z"
+        )
+        # Should return False (ignored)
+        self.assertFalse(success2)
+
+        # Verify that still exactly one TSPResponse exists
+        self.assertEqual(TSPResponse.objects.filter(request=req).count(), 1)
+
+
 
 
 
