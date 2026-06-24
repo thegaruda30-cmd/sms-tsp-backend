@@ -158,7 +158,7 @@ class SMSSystemTests(APITestCase):
         assert tsp_resp is not None
         self.assertEqual(tsp_resp.details, 'Okey we will inform soon')
         self.assertEqual(tsp_resp.status, 'Received')
-        self.assertEqual(tsp_resp.subscriber_status, 'Unknown (see full response)')
+        self.assertEqual(tsp_resp.subscriber_status, 'Unknown')
         
         # Post actual subscriber info later
         data_actual = {

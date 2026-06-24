@@ -422,7 +422,7 @@ def parse_tsp_sms_response(message, tsp_name=''):
     # If we couldn't extract a clean status, mark as Unknown rather than
     # dumping the full raw SMS body into the status field
     if not result['subscriber_status']:
-        result['subscriber_status'] = 'Unknown (see full response)'
+        result['subscriber_status'] = 'Unknown'
 
     return result
 
