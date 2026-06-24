@@ -116,6 +116,7 @@ def is_acknowledgment_message(message):
         "service status",
         "network:",
         "jio", "airtel", "bsnl", "vodafone", "idea",
+        "done", "completed", "processed", "donee",
     ]
 
     has_subscriber_data = any(key in message_clean for key in subscriber_keys)
@@ -838,7 +839,31 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         req.response = message
     req.response_date = timezone.now()
 
-    if req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved:
+    # Check current system settings dynamically at response receipt time
+    from api.models import SystemSetting, PermissionSetting
+    absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
+    is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
+
+    direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+    is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+
+    has_direct_permission = False
+    try:
+        perm = PermissionSetting.objects.get(officer=req.officer)
+        has_direct_permission = perm.direct_forward_allowed
+    except Exception:
+        pass
+
+    should_auto_complete = (
+        req.is_absent_approved or 
+        req.is_direct_forwarded or 
+        req.is_auto_approved or 
+        is_absent_mode_on or 
+        is_direct_forward_on or 
+        has_direct_permission
+    )
+
+    if should_auto_complete:
         req.status = RequestStatus.COMPLETED
         req.admin_status = 'Completed'
     else:
@@ -872,7 +897,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             timestamp=timezone.now(),
             mobile_number=req.mobile_number,
             tsp_provider=tsp_provider.name,
-            status='Sent to Officer' if (req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved) else 'Received',
+            status='Sent to Officer' if should_auto_complete else 'Received',
             response_date=timezone.now(),
             subscriber_status=parsed_status,
             circle=parsed_circle,
@@ -887,10 +912,10 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         print(f"[TSP RESPONSE] DB INSERT FAILED for request #{req.id}: {_db_err}")
         raise  # re-raise so caller knows it failed
 
-    if req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved:
-        flow_title = "Direct Forward Mode" if (req.is_direct_forwarded or req.is_auto_approved) else "Admin Absent Mode"
-        flow_remarks = "Direct Forward Auto-Flow" if (req.is_direct_forwarded or req.is_auto_approved) else "Admin Absent Auto-Flow"
-        flow_details = "direct-forwarded" if (req.is_direct_forwarded or req.is_auto_approved) else "absent-approved"
+    if should_auto_complete:
+        flow_title = "Direct Forward Mode" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Mode"
+        flow_remarks = "Direct Forward Auto-Flow" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "Admin Absent Auto-Flow"
+        flow_details = "direct-forwarded" if (req.is_direct_forwarded or req.is_auto_approved or is_direct_forward_on or has_direct_permission) else "absent-approved"
 
         RequestStatusLog.objects.create(
             request=req,
