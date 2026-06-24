@@ -838,7 +838,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         req.response = message
     req.response_date = timezone.now()
 
-    if req.is_absent_approved:
+    if req.is_absent_approved or req.is_direct_forwarded:
         req.status = RequestStatus.COMPLETED
         req.admin_status = 'Completed'
     else:
@@ -872,7 +872,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             timestamp=timezone.now(),
             mobile_number=req.mobile_number,
             tsp_provider=tsp_provider.name,
-            status='Sent to Officer' if req.is_absent_approved else 'Received',
+            status='Sent to Officer' if (req.is_absent_approved or req.is_direct_forwarded) else 'Received',
             response_date=timezone.now(),
             subscriber_status=parsed_status,
             circle=parsed_circle,
@@ -887,30 +887,34 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         print(f"[TSP RESPONSE] DB INSERT FAILED for request #{req.id}: {_db_err}")
         raise  # re-raise so caller knows it failed
 
-    if req.is_absent_approved:
+    if req.is_absent_approved or req.is_direct_forwarded:
+        flow_title = "Direct Forward Mode" if req.is_direct_forwarded else "Admin Absent Mode"
+        flow_remarks = "Direct Forward Auto-Flow" if req.is_direct_forwarded else "Admin Absent Auto-Flow"
+        flow_details = "direct-forwarded" if req.is_direct_forwarded else "absent-approved"
+
         RequestStatusLog.objects.create(
             request=req,
             status=RequestStatus.COMPLETED,
             changed_by=admin_user,
-            remarks=f"Inbound SMS response automatically completed (Admin Absent Auto-Flow) matching request #{req.id}."
+            remarks=f"Inbound SMS response automatically completed ({flow_remarks}) matching request #{req.id}."
         )
 
         log_activity(
             "Auto Inbound TSP SMS Response Completed",
             admin_user,
             request=req,
-            details=f"TSP response auto-forwarded to officer because request was absent-approved. Content: {message[:100]}"
+            details=f"TSP response auto-forwarded to officer because request was {flow_details}. Content: {message[:100]}"
         )
 
         create_notification(
             req.officer,
-            "TSP Request Completed (Admin Absent Mode)",
+            f"TSP Request Completed ({flow_title})",
             f"TSP response for request #{req.id} ({req.mobile_number}) has been auto-completed: {req.response}"
         )
 
         # Send chat message to officer
         response_summary = (
-            f"✅ **TSP Response Auto-Forwarded (Admin Absent Mode)** ✅\n"
+            f"✅ **TSP Response Auto-Forwarded ({flow_title})** ✅\n"
             f"📱 **Mobile:** {req.mobile_number}\n"
             f"📶 **TSP:** {tsp_provider.name}\n"
             f"📋 **Subscriber Status:** {parsed_status}\n"
@@ -933,7 +937,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         async_save_admin_forward_response(req, resp, admin_user)
         async_log_status(
             req, admin_user,
-            action_type="TSP SMS Response Auto-Forwarded (Admin Absent)",
+            action_type=f"TSP SMS Response Auto-Forwarded ({flow_title})",
             details=formatted_details,
             old_status="Forwarded_To_TSP",
             new_status="Forwarded_To_Officer",

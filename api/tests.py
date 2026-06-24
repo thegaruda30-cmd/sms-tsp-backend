@@ -417,6 +417,48 @@ class SMSSystemTests(APITestCase):
         # Verify that still exactly one TSPResponse exists
         self.assertEqual(TSPResponse.objects.filter(request=req).count(), 1)
 
+    def test_process_single_received_sms_direct_forwarded(self):
+        from api.views import process_single_received_sms
+        from api.models import TSPResponse, RequestStatusLog
+        
+        # Create a forwarded request with is_direct_forwarded = True
+        bsnl = TSPProvider.objects.create(name="BSNL", code="BSNL", contact_email="bsnl@test.com", mobile_number="7353224351")
+        req_bsnl = Request.objects.create(
+            mobile_number="9999933333",
+            tsp=bsnl,
+            reason="Test BSNL Direct Forward Mode",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            is_direct_forwarded=True
+        )
+        
+        # Simulate SMS from number '7353224351' mentioning BSNL
+        success = process_single_received_sms(
+            sms_id="sms_test_bsnl_direct",
+            sender="7353224351",
+            message="BSNL Status: Active\nCircle: Karnataka\nActivation Date: 2026-06-13",
+            received_at_str="2026-06-13T10:00:00Z"
+        )
+        self.assertTrue(success)
+        
+        # Verify the BSNL request status changed directly to COMPLETED and admin_status to Completed
+        req_bsnl.refresh_from_db()
+        self.assertEqual(req_bsnl.status, RequestStatus.COMPLETED)
+        self.assertEqual(req_bsnl.admin_status, 'Completed')
+        self.assertIn("Active", req_bsnl.response)
+        
+        # Verify TSPResponse is created with status 'Sent to Officer'
+        tsp_resp = TSPResponse.objects.filter(request=req_bsnl).first()
+        self.assertIsNotNone(tsp_resp)
+        assert tsp_resp is not None
+        self.assertEqual(tsp_resp.status, 'Sent to Officer')
+        self.assertEqual(tsp_resp.subscriber_status, 'Active')
+        
+        # Verify status log exists for the COMPLETED state
+        log_exists = RequestStatusLog.objects.filter(request=req_bsnl, status=RequestStatus.COMPLETED).exists()
+        self.assertTrue(log_exists)
+
+
 
 
 
