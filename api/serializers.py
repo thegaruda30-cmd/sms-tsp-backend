@@ -3,7 +3,8 @@
 from rest_framework import serializers
 from api.models import (
     User, TSPProvider, Request, RequestStatusLog, TSPResponse, PermissionSetting,
-    SystemNotification, ActivityLog, SystemSetting, ChatMessage, SMSLog, TspSetting
+    SystemNotification, ActivityLog, SystemSetting, ChatMessage, SMSLog, TspSetting,
+    UserRole, RequestStatus
 )
 
 class TSPProviderSerializer(serializers.ModelSerializer):
@@ -137,6 +138,40 @@ class RequestSerializer(serializers.ModelSerializer):
             'sms_logs'
         ]
         read_only_fields = ['status', 'officer', 'officer_name', 'is_auto_approved', 'admin_remarks', 'forwarded_at', 'response', 'response_date', 'admin_status', 'ticket_id']
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user:
+            user = request.user
+            if user.role == UserRole.OFFICER:
+                # Mask TSP_RESPONDED status to FORWARDED so officers don't see the response state prematurely
+                if rep.get('status') == RequestStatus.TSP_RESPONDED:
+                    rep['status'] = RequestStatus.FORWARDED
+                    rep['admin_status'] = 'Forwarded to TSP'
+                
+                # Officers must only see response details when the request is COMPLETED or CLOSED
+                if instance.status not in [RequestStatus.COMPLETED, RequestStatus.CLOSED]:
+                    rep['response'] = ''
+                    rep['response_date'] = None
+                    rep['tsp_response'] = None
+                    rep['sms_logs'] = []
+                    
+                    # Filter out status logs that contain TSP_RESPONDED status
+                    if 'status_logs' in rep:
+                        rep['status_logs'] = [
+                            log for log in rep['status_logs']
+                            if log.get('status') != RequestStatus.TSP_RESPONDED
+                        ]
+            elif user.role == UserRole.TSP:
+                # TSP representatives should only see responses if it was responded or completed/closed
+                if instance.status not in [RequestStatus.TSP_RESPONDED, RequestStatus.COMPLETED, RequestStatus.CLOSED]:
+                    rep['response'] = ''
+                    rep['response_date'] = None
+                    rep['tsp_response'] = None
+                    rep['sms_logs'] = []
+        return rep
+
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.username', read_only=True)

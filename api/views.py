@@ -509,8 +509,15 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         return False
 
     # ── Mandatory debug logging ───────────────────────────────────────────────
-    print(f"[TSP RESPONSE] Incoming SMS id={sms_id} from={sender}")
-    print(f"[TSP RESPONSE] Message content: {message[:200]}")
+    try:
+        print(f"[TSP RESPONSE] Incoming SMS id={sms_id} from={sender}")
+        print(f"[TSP RESPONSE] Message content: {message[:200]}")
+    except Exception:
+        try:
+            print(f"[TSP RESPONSE] Incoming SMS id={sms_id} from={sender}")
+            print(f"[TSP RESPONSE] Message content: {message[:200].encode('ascii', errors='replace').decode('ascii')}")
+        except Exception:
+            pass
     # ─────────────────────────────────────────────────────────────────────────
 
     req = None
@@ -616,7 +623,13 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
 
     if not req:
         # Discard unmatched SMS - not required
-        print(f"[TSP RESPONSE] Discarded unmatched SMS id={sms_id} from={sender} (no matching request found): {message[:80]}")
+        try:
+            print(f"[TSP RESPONSE] Discarded unmatched SMS id={sms_id} from={sender} (no matching request found): {message[:80]}")
+        except Exception:
+            try:
+                print(f"[TSP RESPONSE] Discarded unmatched SMS id={sms_id} from={sender} (no matching request found): {message[:80].encode('ascii', errors='replace').decode('ascii')}")
+            except Exception:
+                pass
         return False
 
     tsp_provider = req.tsp
@@ -710,85 +723,83 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                 )
         return True
 
-    # [DISABLED] Acknowledgment messages are now treated as standard replies
-    # so they do not block forwarding or leave requests stuck in Processing.
-    # if is_acknowledgment_message(message):
-    #     # Acknowledgment message received. Update request status to PROCESSING and admin status.
-    #     req.status = RequestStatus.PROCESSING
-    #     req.admin_status = 'Acknowledgment Received'
-    #     req.save()
-    # 
-    # 
-    #     # Create SMS Log
-    #     SMSLog.objects.create(
-    #         request=req,
-    #         direction='RECEIVED',
-    #         operator=tsp_provider.name,
-    #         tsp_number=sender,
-    #         message=f"Auto-Received Inbound SMS from TextBee:\n{message}"
-    #     )
-    # 
-    #     admin_user = User.objects.filter(role=UserRole.ADMIN).first()
-    #     
-    #     # Save/update TSPResponse for acknowledgment messages
-    #     resp, created = TSPResponse.objects.update_or_create(
-    #         request=req,
-    #         defaults={
-    #             'details': message,
-    #             'submitted_by': admin_user,
-    #             'created_by': admin_user,
-    #             'timestamp': timezone.now(),
-    #             'mobile_number': req.mobile_number,
-    #             'tsp_provider': tsp_provider.name,
-    #             'status': 'Received',
-    #             'response_date': timezone.now(),
-    #             'subscriber_status': 'Under Process',
-    #             'circle': '',
-    #             'activation_date': None,
-    #             'additional_notes': f"Auto-processed SMS from {sender}"
-    #         }
-    #     )
-    #     save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
-    # 
-    #     # Log the status change
-    #     RequestStatusLog.objects.create(
-    #         request=req,
-    #         status=RequestStatus.PROCESSING,
-    #         changed_by=admin_user,
-    #         remarks=f"Inbound acknowledgment SMS automatically polled: '{message}'."
-    #     )
-    # 
-    #     log_activity(
-    #         "Auto Inbound TSP SMS Acknowledgment",
-    #         admin_user,
-    #         request=req,
-    #         details=f"TSP sent acknowledgment SMS from {sender}. Content: {message[:100]}"
-    #     )
-    # 
-    #     # Notify admins that TSP has acknowledged the request
-    #     notify_admins(
-    #         "TSP SMS Acknowledgment Received (Auto)",
-    #         f"TSP {tsp_provider.name} acknowledged request #{req.id} (Mobile: {req.mobile_number}) and is processing it."
-    #     )
-    #     
-    #     # Save request update to file database
-    #     save_request_to_file(req.id, RequestSerializer(req).data)
-    #     
-    #     # ── Mirror to Supabase ───────────────────────────────────────────────
-    #     if admin_user:
-    #         async_sync_user(admin_user)
-    #     async_save_request(req)
-    #     async_save_tsp_response(req, resp, None)
-    #     async_log_status(
-    #         req, admin_user,
-    #         action_type="TSP Acknowledgment Polled (Auto)",
-    #         details=f"TSP sent acknowledgment SMS from {sender}. Content: {message[:100]}",
-    #         old_status="Forwarded_To_TSP",
-    #         new_status="Forwarded_To_TSP",
-    #     )
-    #     # ────────────────────────────────────────────────────────────────────
-    # 
-    #     return True
+    if is_acknowledgment_message(message):
+        # Acknowledgment message received. Update request status to PROCESSING and admin status.
+        req.status = RequestStatus.PROCESSING
+        req.admin_status = 'Acknowledgment Received'
+        req.save()
+
+
+        # Create SMS Log
+        SMSLog.objects.create(
+            request=req,
+            direction='RECEIVED',
+            operator=tsp_provider.name,
+            tsp_number=sender,
+            message=f"Auto-Received Inbound SMS from TextBee:\n{message}"
+        )
+
+        admin_user = User.objects.filter(role=UserRole.ADMIN).first()
+        
+        # Save/update TSPResponse for acknowledgment messages
+        resp, created = TSPResponse.objects.update_or_create(
+            request=req,
+            defaults={
+                'details': message,
+                'submitted_by': admin_user,
+                'created_by': admin_user,
+                'timestamp': timezone.now(),
+                'mobile_number': req.mobile_number,
+                'tsp_provider': tsp_provider.name,
+                'status': 'Received',
+                'response_date': timezone.now(),
+                'subscriber_status': 'Under Process',
+                'circle': '',
+                'activation_date': None,
+                'additional_notes': f"Auto-processed SMS from {sender}"
+            }
+        )
+        save_response_to_queue(resp.id, TSPResponseSerializer(resp).data, resp.tsp_provider)
+
+        # Log the status change
+        RequestStatusLog.objects.create(
+            request=req,
+            status=RequestStatus.PROCESSING,
+            changed_by=admin_user,
+            remarks=f"Inbound acknowledgment SMS automatically polled: '{message}'."
+        )
+
+        log_activity(
+            "Auto Inbound TSP SMS Acknowledgment",
+            admin_user,
+            request=req,
+            details=f"TSP sent acknowledgment SMS from {sender}. Content: {message[:100]}"
+        )
+
+        # Notify admins that TSP has acknowledged the request
+        notify_admins(
+            "TSP SMS Acknowledgment Received (Auto)",
+            f"TSP {tsp_provider.name} acknowledged request #{req.id} (Mobile: {req.mobile_number}) and is processing it."
+        )
+        
+        # Save request update to file database
+        save_request_to_file(req.id, RequestSerializer(req).data)
+        
+        # ── Mirror to Supabase ───────────────────────────────────────────────
+        if admin_user:
+            async_sync_user(admin_user)
+        async_save_request(req)
+        async_save_tsp_response(req, resp, None)
+        async_log_status(
+            req, admin_user,
+            action_type="TSP Acknowledgment Polled (Auto)",
+            details=f"TSP sent acknowledgment SMS from {sender}. Content: {message[:100]}",
+            old_status="Forwarded_To_TSP",
+            new_status="Forwarded_To_TSP",
+        )
+        # ────────────────────────────────────────────────────────────────────
+
+        return True
 
     # Parse details from message body using TSP-specific parser
     _parsed = parse_tsp_sms_response(message, tsp_name=tsp_provider.name)
@@ -1025,10 +1036,12 @@ def poll_incoming_sms():
                     continue
 
                 # Process this single SMS response
-                success = process_single_received_sms(sms_id, sender, message, received_at_str)
-                if success:
-                    new_processed_ids.append(sms_id)
-                    has_new = True
+                try:
+                    process_single_received_sms(sms_id, sender, message, received_at_str)
+                except Exception as ex:
+                    print(f"Error processing received SMS id={sms_id}: {ex}")
+                new_processed_ids.append(sms_id)
+                has_new = True
 
             if has_new:
                 save_processed_sms_ids(new_processed_ids)
@@ -3252,9 +3265,9 @@ class ChatMessageViewSet(viewsets.ModelViewSet):
         if user.role == UserRole.ADMIN:
             return qs.order_by('timestamp')
         elif user.role == UserRole.OFFICER:
-            return qs.filter(Q(sender=user) | Q(receiver=user) | Q(request__officer=user)).order_by('timestamp')
+            return qs.filter(Q(sender=user) | Q(receiver=user)).order_by('timestamp')
         elif user.role == UserRole.TSP:
-            return qs.filter(request__tsp=user.tsp_provider).order_by('timestamp')
+            return qs.filter(Q(sender=user) | Q(receiver=user)).order_by('timestamp')
             
         return ChatMessage.objects.none()
 
