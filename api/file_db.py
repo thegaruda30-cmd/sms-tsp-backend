@@ -165,3 +165,69 @@ def save_processed_sms_ids(sms_ids):
             print(f"Error saving processed SMS IDs: {e}")
             return False
 
+
+class ProcessLock:
+    def __init__(self, lock_dir):
+        self.lock_dir = lock_dir
+
+    def __enter__(self):
+        import time
+        # Try to acquire lock by creating the directory
+        for _ in range(50):  # Timeout after 5 seconds
+            try:
+                os.mkdir(self.lock_dir)
+                return self
+            except FileExistsError:
+                time.sleep(0.1)
+        raise TimeoutError("Could not acquire cross-process lock on processed_sms")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            os.rmdir(self.lock_dir)
+        except OSError:
+            pass
+
+
+def try_mark_sms_as_processed(sms_id):
+    """
+    Checks if an SMS ID is already processed.
+    If it is, returns False.
+    If it is not, marks it as processed, saves, and returns True.
+    This operation is thread-safe and process-safe across multiple Gunicorn workers.
+    """
+    if not sms_id:
+        return False
+
+    lock_dir = os.path.join(DB_BASE_DIR, 'processed_sms.lock_dir')
+    try:
+        with ProcessLock(lock_dir):
+            processed_ids = []
+            if os.path.exists(PROCESSED_SMS_FILE):
+                try:
+                    with open(PROCESSED_SMS_FILE, 'r', encoding='utf-8') as f:
+                        processed_ids = json.load(f)
+                except Exception as e:
+                    print(f"Error loading processed SMS IDs: {e}")
+
+            if sms_id in processed_ids:
+                return False
+
+            processed_ids.append(sms_id)
+            try:
+                dir_name = os.path.dirname(PROCESSED_SMS_FILE)
+                fd, temp_path = tempfile.mkstemp(dir=dir_name)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        json.dump(processed_ids, f, indent=4)
+                    os.replace(temp_path, PROCESSED_SMS_FILE)
+                except Exception as ex:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise ex
+            except Exception as e:
+                print(f"Error saving processed SMS IDs: {e}")
+            return True
+    except TimeoutError:
+        # If lock times out, assume it is currently being processed or already processed
+        return False
+

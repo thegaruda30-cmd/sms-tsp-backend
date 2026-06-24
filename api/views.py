@@ -1008,15 +1008,11 @@ def poll_incoming_sms():
             res_data = json.loads(res_body)
             messages = res_data.get('data', [])
             
-            # Load already processed SMS IDs
-            from api.file_db import load_processed_sms_ids, save_processed_sms_ids
-            processed_ids = load_processed_sms_ids()
-            new_processed_ids = list(processed_ids)
-            has_new = False
+            from api.file_db import try_mark_sms_as_processed
 
             for msg_data in messages:
                 sms_id = msg_data.get('_id')
-                if not sms_id or sms_id in processed_ids:
+                if not sms_id:
                     continue
 
                 sender = msg_data.get('sender', '')
@@ -1031,9 +1027,11 @@ def poll_incoming_sms():
                         is_tsp_sender = True
                         break
 
+                # Atomic check-and-mark to prevent concurrency duplicates (e.g. between Poller and Webhook)
+                if not try_mark_sms_as_processed(sms_id):
+                    continue
+
                 if not is_tsp_sender:
-                    new_processed_ids.append(sms_id)
-                    has_new = True
                     continue
 
                 # Process this single SMS response
@@ -1041,11 +1039,6 @@ def poll_incoming_sms():
                     process_single_received_sms(sms_id, sender, message, received_at_str)
                 except Exception as ex:
                     print(f"Error processing received SMS id={sms_id}: {ex}")
-                new_processed_ids.append(sms_id)
-                has_new = True
-
-            if has_new:
-                save_processed_sms_ids(new_processed_ids)
 
     except Exception as e:
         print(f"Error polling TextBee SMS: {e}")
@@ -1357,23 +1350,23 @@ class RequestViewSet(viewsets.ModelViewSet):
         ).order_by('-created_at')
 
         if user.role == UserRole.ADMIN:
-            # Poll synchronously so admin gets fresh updates immediately
+            # Poll asynchronously so we don't block the request thread
             try:
-                poll_incoming_sms()
+                poll_incoming_sms_async()
             except Exception:
                 pass
             return qs
         elif user.role == UserRole.OFFICER:
-            # Poll synchronously so officer gets fresh updates immediately
+            # Poll asynchronously so we don't block the request thread
             try:
-                poll_incoming_sms()
+                poll_incoming_sms_async()
             except Exception:
                 pass
             return qs.filter(officer=user)
         elif user.role == UserRole.TSP:
-            # Poll synchronously so TSP gets fresh updates immediately
+            # Poll asynchronously so we don't block the request thread
             try:
-                poll_incoming_sms()
+                poll_incoming_sms_async()
             except Exception:
                 pass
             # Show requests forwarded to their TSP
@@ -2626,7 +2619,7 @@ class AdminDashboardStatsView(views.APIView):
             return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            poll_incoming_sms()
+            poll_incoming_sms_async()
         except Exception:
             pass
         requests_qs = Request.objects.all()
@@ -3352,7 +3345,7 @@ class TSPResponseViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == UserRole.ADMIN:
             try:
-                poll_incoming_sms()
+                poll_incoming_sms_async()
             except Exception:
                 pass
             return TSPResponse.objects.all().order_by('-created_at')
@@ -3532,21 +3525,19 @@ class PollSMSView(views.APIView):
                 res_data = json.loads(response.read().decode('utf-8'))
                 messages = res_data.get('data', [])
 
-            from api.file_db import load_processed_sms_ids, save_processed_sms_ids
-            processed_ids = load_processed_sms_ids()
-            new_processed_ids = list(processed_ids)
+            from api.file_db import try_mark_sms_as_processed
             processed_count = 0
             ack_count = 0
 
             for msg_data in messages:
                 sms_id = msg_data.get('_id')
-                if not sms_id or sms_id in processed_ids:
+                if not sms_id:
                     continue
                 sender = msg_data.get('sender', '')
                 message = msg_data.get('message', '')
                 received_at_str = msg_data.get('receivedAt', '')
 
-                # Filter non-TSP senders early and mark them as processed
+                # Filter non-TSP senders early
                 sender_clean = normalize_phone(sender)
                 is_tsp_sender = False
                 for tsp in TSPProvider.objects.filter(is_active=True):
@@ -3554,20 +3545,18 @@ class PollSMSView(views.APIView):
                         is_tsp_sender = True
                         break
 
+                # Atomic check-and-mark to prevent concurrency duplicates (e.g. between Poller and Webhook)
+                if not try_mark_sms_as_processed(sms_id):
+                    continue
+
                 if not is_tsp_sender:
-                    new_processed_ids.append(sms_id)
-                    processed_count += 1
                     continue
 
                 success = process_single_received_sms(sms_id, sender, message, received_at_str)
                 if success:
-                    new_processed_ids.append(sms_id)
                     processed_count += 1
                     if is_acknowledgment_message(message):
                         ack_count += 1
-
-            if processed_count > 0:
-                save_processed_sms_ids(new_processed_ids)
 
             # Reset the global poll timer so the background poller also re-fetches
             global LAST_POLL_TIME
@@ -3612,14 +3601,13 @@ class TextBeeWebhookView(views.APIView):
             print("[TEXTBEE WEBHOOK] Empty message body — ignoring.")
             return Response({"detail": "Empty message ignored."}, status=200)
 
-        # Check if already processed
-        from api.file_db import load_processed_sms_ids, save_processed_sms_ids
-        processed_ids = load_processed_sms_ids()
-        if sms_id in processed_ids:
+        # Atomic check-and-mark to prevent concurrency duplicates (e.g. between Poller and Webhook)
+        from api.file_db import try_mark_sms_as_processed
+        if not try_mark_sms_as_processed(sms_id):
             print(f"[TEXTBEE WEBHOOK] SMS {sms_id} already processed — skipping.")
             return Response({"detail": "Already processed."}, status=200)
 
-        # Filter non-TSP senders early and mark them as processed
+        # Filter non-TSP senders early
         sender_clean = normalize_phone(sender)
         is_tsp_sender = False
         for tsp in TSPProvider.objects.filter(is_active=True):
@@ -3628,17 +3616,13 @@ class TextBeeWebhookView(views.APIView):
                 break
 
         if not is_tsp_sender:
-            processed_ids.append(sms_id)
-            save_processed_sms_ids(processed_ids)
-            print(f"[TEXTBEE WEBHOOK] Ignored and marked non-TSP SMS {sms_id} from {sender} as processed.")
+            print(f"[TEXTBEE WEBHOOK] Ignored non-TSP SMS {sms_id} from {sender}.")
             return Response({"detail": "Ignored non-TSP sender."}, status=200)
 
         print(f"[TEXTBEE WEBHOOK] Processing SMS {sms_id} from {sender}: {message_body[:100]}")
         try:
             success = process_single_received_sms(sms_id, sender, message_body, received_at)
             if success:
-                processed_ids.append(sms_id)
-                save_processed_sms_ids(processed_ids)
                 # Reset poll timer so next background poll also skips already-processed IDs
                 global LAST_POLL_TIME
                 LAST_POLL_TIME = 0
