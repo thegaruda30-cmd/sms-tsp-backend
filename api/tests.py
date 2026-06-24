@@ -458,6 +458,41 @@ class SMSSystemTests(APITestCase):
         log_exists = RequestStatusLog.objects.filter(request=req_bsnl, status=RequestStatus.COMPLETED).exists()
         self.assertTrue(log_exists)
 
+    def test_process_single_received_sms_global_direct_forwarded(self):
+        from api.views import process_single_received_sms
+        from api.models import TSPResponse, RequestStatusLog
+        
+        # Create a forwarded request with is_auto_approved = True (global direct send option)
+        bsnl = TSPProvider.objects.create(name="BSNL", code="BSNL", contact_email="bsnl@test.com", mobile_number="7353224352")
+        req_bsnl = Request.objects.create(
+            mobile_number="9999944444",
+            tsp=bsnl,
+            reason="Test BSNL Global Direct Forward Mode",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            is_auto_approved=True
+        )
+        
+        # Simulate SMS from number '7353224352' mentioning BSNL
+        success = process_single_received_sms(
+            sms_id="sms_test_bsnl_global_direct",
+            sender="7353224352",
+            message="BSNL Status: Active\nCircle: Karnataka\nActivation Date: 2026-06-13",
+            received_at_str="2026-06-13T10:00:00Z"
+        )
+        self.assertTrue(success)
+        
+        # Verify the BSNL request status changed directly to COMPLETED
+        req_bsnl.refresh_from_db()
+        self.assertEqual(req_bsnl.status, RequestStatus.COMPLETED)
+        self.assertEqual(req_bsnl.admin_status, 'Completed')
+        
+        # Verify TSPResponse is created with status 'Sent to Officer'
+        tsp_resp = TSPResponse.objects.filter(request=req_bsnl).first()
+        self.assertIsNotNone(tsp_resp)
+        self.assertEqual(tsp_resp.status, 'Sent to Officer')
+
+
 
 
 

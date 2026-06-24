@@ -838,7 +838,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         req.response = message
     req.response_date = timezone.now()
 
-    if req.is_absent_approved or req.is_direct_forwarded:
+    if req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved:
         req.status = RequestStatus.COMPLETED
         req.admin_status = 'Completed'
     else:
@@ -872,7 +872,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             timestamp=timezone.now(),
             mobile_number=req.mobile_number,
             tsp_provider=tsp_provider.name,
-            status='Sent to Officer' if (req.is_absent_approved or req.is_direct_forwarded) else 'Received',
+            status='Sent to Officer' if (req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved) else 'Received',
             response_date=timezone.now(),
             subscriber_status=parsed_status,
             circle=parsed_circle,
@@ -887,10 +887,10 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         print(f"[TSP RESPONSE] DB INSERT FAILED for request #{req.id}: {_db_err}")
         raise  # re-raise so caller knows it failed
 
-    if req.is_absent_approved or req.is_direct_forwarded:
-        flow_title = "Direct Forward Mode" if req.is_direct_forwarded else "Admin Absent Mode"
-        flow_remarks = "Direct Forward Auto-Flow" if req.is_direct_forwarded else "Admin Absent Auto-Flow"
-        flow_details = "direct-forwarded" if req.is_direct_forwarded else "absent-approved"
+    if req.is_absent_approved or req.is_direct_forwarded or req.is_auto_approved:
+        flow_title = "Direct Forward Mode" if (req.is_direct_forwarded or req.is_auto_approved) else "Admin Absent Mode"
+        flow_remarks = "Direct Forward Auto-Flow" if (req.is_direct_forwarded or req.is_auto_approved) else "Admin Absent Auto-Flow"
+        flow_details = "direct-forwarded" if (req.is_direct_forwarded or req.is_auto_approved) else "absent-approved"
 
         RequestStatusLog.objects.create(
             request=req,
@@ -2628,10 +2628,9 @@ class AdminDashboardStatsView(views.APIView):
         if request.user.role != UserRole.ADMIN:
             return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
 
-        try:
-            poll_incoming_sms_async()
-        except Exception:
-            pass
+        # Background poller runs every 15 seconds automatically.
+        # Removing poll_incoming_sms_async() call here to prevent concurrent SQLite DB write lock contentions.
+        pass
         requests_qs = Request.objects.all()
         
         # Single database query to aggregate all metrics
