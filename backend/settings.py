@@ -120,9 +120,12 @@ else:
             'NAME': os.environ.get('SUPABASE_DB_NAME', 'postgres'),
             'USER': os.environ.get('SUPABASE_DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('SUPABASE_DB_PASSWORD', 'smsforward@system'),
-            'CONN_MAX_AGE': 0,
+            # Keep connections alive for 60s to avoid paying a new SSL handshake on every request
+            'CONN_MAX_AGE': 60,
+            'CONN_HEALTH_CHECKS': True,
             'OPTIONS': {
                 'sslmode': 'require',
+                'connect_timeout': 5,
             }
         },
         'sqlite': {

@@ -3408,10 +3408,15 @@ class FieldOfficerListView(views.APIView):
         if request.user.role != UserRole.ADMIN:
             return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
         
-        officers = User.objects.filter(role=UserRole.OFFICER)
-        # Create permissions if they do not exist
-        for officer in officers:
-            PermissionSetting.objects.get_or_create(officer=officer)
+        # Use select_related to fetch permissions in a single JOIN — avoids N+1 queries
+        officers = User.objects.filter(role=UserRole.OFFICER).select_related('permission')
+        # Bulk-create missing PermissionSetting rows in one query instead of a loop
+        officer_ids_with_perms = set(
+            PermissionSetting.objects.filter(officer__in=officers).values_list('officer_id', flat=True)
+        )
+        missing = [PermissionSetting(officer=o) for o in officers if o.id not in officer_ids_with_perms]
+        if missing:
+            PermissionSetting.objects.bulk_create(missing, ignore_conflicts=True)
 
         serializer = UserSerializer(officers, many=True)
         return Response(serializer.data)
@@ -3805,6 +3810,181 @@ class TextBeeWebhookView(views.APIView):
             return Response({"detail": f"Error: {str(e)}"}, status=200)  # Return 200 so TextBee doesn't retry
 
 
+class DashboardView(views.APIView):
+    """
+    Combined dashboard endpoint — returns ALL data needed for the initial
+    dashboard load in a single request, eliminating 7+ sequential HTTP calls.
+
+    Response shape:
+    {
+      "profile": {...},
+      "tsps": [...],
+      "requests": [...],
+      "notifications": [...],
+      "stats": {...},            # role-specific stats
+      "field_officers": [...],   # ADMIN only
+      "activity_logs": [...],    # ADMIN only
+      "sms_logs": [...],         # ADMIN only
+      "tsp_settings": [...],     # ADMIN only
+    }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # --- Profile ---
+        profile_data = UserSerializer(user).data
+        if user.role == UserRole.ADMIN:
+            setting = SystemSetting.objects.filter(key='admin_mobile_number').first()
+            profile_data['phone_number'] = setting.value if setting else '9844281875'
+
+        # --- TSPs ---
+        tsps_qs = TSPProvider.objects.all()
+        tsps_data = TSPProviderSerializer(tsps_qs, many=True).data
+
+        # --- Requests (role-filtered) ---
+        req_qs = Request.objects.select_related(
+            'tsp', 'officer', 'officer__permission', 'tsp_response'
+        ).prefetch_related('status_logs', 'sms_logs')
+
+        if user.role == UserRole.OFFICER:
+            req_qs = req_qs.filter(officer=user).order_by('-created_at')
+        elif user.role == UserRole.TSP:
+            if user.tsp_provider:
+                req_qs = req_qs.filter(tsp=user.tsp_provider).order_by('-created_at')
+            else:
+                req_qs = req_qs.none()
+        else:
+            req_qs = req_qs.order_by('-created_at')
+
+        requests_data = RequestSerializer(req_qs, many=True, context={'request': request}).data
+
+        # --- Notifications (last 50 only to reduce payload size) ---
+        notifications_qs = SystemNotification.objects.filter(user=user).order_by('-created_at')[:50]
+        notifications_data = SystemNotificationSerializer(notifications_qs, many=True).data
+
+        # --- Role-specific stats (single aggregated DB query each) ---
+        stats = {}
+        if user.role == UserRole.ADMIN:
+            all_req_qs = Request.objects.all()
+            metrics = all_req_qs.aggregate(
+                total=Count('id'),
+                pending=Count('id', filter=Q(status=RequestStatus.PENDING)),
+                completed=Count('id', filter=Q(status=RequestStatus.COMPLETED)),
+                airtel=Count('id', filter=Q(tsp__code='AIRTEL')),
+                jio=Count('id', filter=Q(tsp__code='JIO')),
+                vodafone=Count('id', filter=Q(tsp__code='VI')),
+                bsnl=Count('id', filter=Q(tsp__code='BSNL')),
+                approved=Count('id', filter=Q(status__in=[RequestStatus.FORWARDED, RequestStatus.TSP_RESPONDED, RequestStatus.COMPLETED])),
+                rejected=Count('id', filter=Q(status=RequestStatus.REJECTED)),
+                auto_approved=Count('id', filter=Q(is_auto_approved=True)),
+                direct_tsp=Count('id', filter=Q(is_direct_forwarded=True)),
+                absent_approved=Count('id', filter=Q(is_absent_approved=True))
+            )
+            tsp_stats_agg = list(all_req_qs.values('tsp__name').annotate(count=Count('id')).order_by('-count'))
+            officer_stats_agg = list(all_req_qs.values('officer__username').annotate(count=Count('id')).order_by('-count'))
+            recent_activities = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:10]
+            recent_activities_data = ActivityLogSerializer(recent_activities, many=True).data
+            settings_dict = {s.key: s.value for s in SystemSetting.objects.filter(key__in=[
+                'auto_approval_mode', 'auto_routing_mode', 'admin_absent_mode',
+                'admin_absent_mode_type', 'allow_direct_forwarding', 'admin_status', 'admin_mobile_number'
+            ])}
+            stats = {
+                'total_requests': metrics['total'] or 0,
+                'pending_requests': metrics['pending'] or 0,
+                'completed_requests': metrics['completed'] or 0,
+                'approved_requests': metrics['approved'] or 0,
+                'rejected_requests': metrics['rejected'] or 0,
+                'auto_approved_requests': metrics['auto_approved'] or 0,
+                'direct_tsp_requests': metrics['direct_tsp'] or 0,
+                'absent_approved_requests': metrics['absent_approved'] or 0,
+                'airtel_requests': metrics['airtel'] or 0,
+                'jio_requests': metrics['jio'] or 0,
+                'vodafone_requests': metrics['vodafone'] or 0,
+                'bsnl_requests': metrics['bsnl'] or 0,
+                'tsp_stats': tsp_stats_agg,
+                'officer_stats': officer_stats_agg,
+                'recent_activities': recent_activities_data,
+                'auto_approval_mode': settings_dict.get('auto_approval_mode', 'false').lower() == 'true',
+                'auto_routing_mode': settings_dict.get('auto_routing_mode', 'false').lower() == 'true',
+                'admin_absent_mode': settings_dict.get('admin_absent_mode', 'false').lower() == 'true',
+                'admin_absent_mode_type': settings_dict.get('admin_absent_mode_type', 'all').lower(),
+                'allow_direct_forwarding': settings_dict.get('allow_direct_forwarding', 'false').lower() == 'true',
+                'admin_status': settings_dict.get('admin_status', 'online').lower(),
+                'admin_mobile_number': settings_dict.get('admin_mobile_number', '9844281875'),
+            }
+        elif user.role == UserRole.OFFICER:
+            officer_req_qs = Request.objects.filter(officer=user)
+            metrics = officer_req_qs.aggregate(
+                total=Count('id'),
+                pending=Count('id', filter=Q(status=RequestStatus.PENDING)),
+                completed=Count('id', filter=Q(status=RequestStatus.COMPLETED)),
+                rejected=Count('id', filter=Q(status=RequestStatus.REJECTED)),
+            )
+            try:
+                perm = PermissionSetting.objects.get(officer=user)
+                has_direct_permission = perm.direct_forward_allowed
+            except PermissionSetting.DoesNotExist:
+                has_direct_permission = False
+            stats = {
+                'total_requests': metrics['total'] or 0,
+                'pending_requests': metrics['pending'] or 0,
+                'completed_requests': metrics['completed'] or 0,
+                'rejected_requests': metrics['rejected'] or 0,
+                'direct_forward_permission': has_direct_permission,
+            }
+        elif user.role == UserRole.TSP and user.tsp_provider:
+            tsp_req_qs = Request.objects.filter(tsp=user.tsp_provider)
+            metrics = tsp_req_qs.aggregate(
+                assigned=Count('id', filter=Q(status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING])),
+                responded=Count('id', filter=Q(status=RequestStatus.TSP_RESPONDED)),
+                completed=Count('id', filter=Q(status=RequestStatus.COMPLETED)),
+            )
+            direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+            is_direct_messaging_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+            admin_user = User.objects.filter(role=UserRole.ADMIN).first()
+            stats = {
+                'assigned_requests': metrics['assigned'] or 0,
+                'responded_requests': metrics['responded'] or 0,
+                'completed_requests': metrics['completed'] or 0,
+                'tsp_name': user.tsp_provider.name,
+                'allow_direct_messaging': is_direct_messaging_on,
+                'admin_user_id': admin_user.id if admin_user else None,
+            }
+
+        # --- Admin-only heavy data ---
+        field_officers_data = []
+        activity_logs_data = []
+        sms_logs_data = []
+        tsp_settings_data = []
+
+        if user.role == UserRole.ADMIN:
+            officers_qs = User.objects.filter(role=UserRole.OFFICER).select_related('permission')
+            field_officers_data = UserSerializer(officers_qs, many=True).data
+
+            activity_logs_qs = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:100]
+            activity_logs_data = ActivityLogSerializer(activity_logs_qs, many=True).data
+
+            sms_logs_qs = SMSLog.objects.select_related('request').order_by('-timestamp')[:100]
+            sms_logs_data = SMSLogSerializer(sms_logs_qs, many=True).data
+
+            tsp_settings_qs = TspSetting.objects.all()
+            tsp_settings_data = TspSettingSerializer(tsp_settings_qs, many=True).data
+
+        return Response({
+            'profile': profile_data,
+            'tsps': tsps_data,
+            'requests': requests_data,
+            'notifications': notifications_data,
+            'stats': stats,
+            'field_officers': field_officers_data,
+            'activity_logs': activity_logs_data,
+            'sms_logs': sms_logs_data,
+            'tsp_settings': tsp_settings_data,
+        })
+
+
 class HealthCheckView(views.APIView):
     """
     Public health check endpoint.
@@ -3814,3 +3994,4 @@ class HealthCheckView(views.APIView):
 
     def get(self, request):
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+

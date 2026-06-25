@@ -7,7 +7,7 @@ from api.views import (
     ActivityLogViewSet, ExportReportView, FieldOfficerListView,
     ChatMessageViewSet, DatabaseBrowserView, TSPResponseViewSet, SMSLogViewSet,
     PollSMSView, TextBeeWebhookView, UserProfileView, TspSettingViewSet,
-    HealthCheckView
+    HealthCheckView, DashboardView
 )
 
 router = DefaultRouter()
@@ -35,6 +35,8 @@ urlpatterns = [
     path('reports/', ExportReportView.as_view(), name='export-reports'),
     path('database-browser/', DatabaseBrowserView.as_view(), name='database-browser'),
     path('poll-sms/', PollSMSView.as_view(), name='poll-sms'),
+    # Combined dashboard endpoint — returns all initial data in one request
+    path('dashboard/', DashboardView.as_view(), name='dashboard'),
     # TextBee webhook — called automatically by TextBee when an SMS arrives (no auth needed)
     path('textbee-webhook/', TextBeeWebhookView.as_view(), name='textbee-webhook'),
 ]
