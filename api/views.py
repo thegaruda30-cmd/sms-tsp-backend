@@ -1147,6 +1147,7 @@ def send_textbee_sms(to_number, message_body):
         return False
 
 def get_dashboard_data(user, request):
+    request.user = user
     # --- Profile ---
     profile_data = UserSerializer(user).data
     if user.role == UserRole.ADMIN:
@@ -1159,8 +1160,8 @@ def get_dashboard_data(user, request):
 
     # --- Requests (role-filtered) ---
     req_qs = Request.objects.select_related(
-        'tsp', 'officer', 'officer__permission', 'tsp_response'
-    ).prefetch_related('status_logs', 'sms_logs')
+        'tsp', 'officer', 'officer__permission'
+    ).prefetch_related('status_logs', 'sms_logs', 'tsp_responses')
 
     if user.role == UserRole.OFFICER:
         req_qs = req_qs.filter(officer=user).order_by('-created_at')
