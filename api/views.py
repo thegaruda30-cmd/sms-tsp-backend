@@ -680,7 +680,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         req.is_absent_approved or 
         req.is_direct_forwarded or 
         req.is_auto_approved or 
-        (is_absent_mode_on and is_admin_offline) or 
+        is_absent_mode_on or 
         is_direct_forward_on or 
         has_direct_permission
     )
@@ -1648,7 +1648,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         is_admin_offline = admin_status in ['offline', 'away']
         
         should_absent_approve = False
-        if is_absent_mode_on and is_admin_offline:
+        if is_absent_mode_on:
             if absent_mode_type == 'all':
                 should_absent_approve = True
             elif absent_mode_type == 'specific':
@@ -2278,7 +2278,7 @@ class RequestViewSet(viewsets.ModelViewSet):
             req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            (is_absent_mode_on and is_admin_offline) or 
+            is_absent_mode_on or 
             is_direct_forward_on or 
             has_direct_permission
         )
@@ -2785,7 +2785,7 @@ class RequestViewSet(viewsets.ModelViewSet):
             req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            (is_absent_mode_on and is_admin_offline) or 
+            is_absent_mode_on or 
             is_direct_forward_on or 
             has_direct_permission
         )
