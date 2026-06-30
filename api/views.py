@@ -3,7 +3,7 @@
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from django.db.models import Count, Q
+from django.db.models import Count, Q, F
 from django.http import HttpResponse
 
 from rest_framework import status, views, viewsets, permissions, serializers
@@ -567,7 +567,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                         mobile_number=phone,
                         tsp__in=matching_tsps,
                         status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING]
-                    ).order_by('-forwarded_at', '-created_at').first()
+                    ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
                     if req_candidate:
                         req = req_candidate
                         break
@@ -575,7 +575,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     req_candidate = Request.objects.filter(
                         mobile_number=phone,
                         tsp__in=matching_tsps
-                    ).order_by('-forwarded_at', '-created_at').first()
+                    ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
                     if req_candidate:
                         req = req_candidate
                         break
@@ -584,14 +584,14 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     req_candidate = Request.objects.filter(
                         mobile_number=phone,
                         status__in=[RequestStatus.FORWARDED, RequestStatus.PROCESSING]
-                    ).order_by('-forwarded_at', '-created_at').first()
+                    ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
                     if req_candidate:
                         req = req_candidate
                         break
                     
                     req_candidate = Request.objects.filter(
                         mobile_number=phone
-                    ).order_by('-forwarded_at', '-created_at').first()
+                    ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
                     if req_candidate:
                         req = req_candidate
                         break
@@ -634,7 +634,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
             req = Request.objects.filter(
                 tsp__in=matching_tsps,
                 status__in=_active_statuses
-            ).order_by('-forwarded_at', '-created_at').first()
+            ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
 
             # If still no match, try ANY non-closed/non-rejected request for this TSP
             if not req:
@@ -642,7 +642,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                     tsp__in=matching_tsps
                 ).exclude(
                     status__in=[RequestStatus.CLOSED, RequestStatus.REJECTED]
-                ).order_by('-forwarded_at', '-created_at').first()
+                ).order_by(F('forwarded_at').desc(nulls_last=True), F('created_at').desc()).first()
 
     if not req:
         # Discard unmatched SMS - not required
@@ -1865,6 +1865,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         if action_type == 'APPROVE':
             req.status = RequestStatus.APPROVED
             req.remarks = remarks
+            req.forwarded_at = timezone.now()
             req.save()
             
             # Immediately auto forward approved requests to TSP

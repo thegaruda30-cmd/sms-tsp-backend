@@ -620,6 +620,51 @@ class SMSSystemTests(APITestCase):
         msg, _ = build_tsp_forward_sms(req)
         self.assertEqual(msg, "Loc 5852369000")
 
+    def test_process_single_received_sms_fallback_nulls_last(self):
+        from api.views import process_single_received_sms
+        from django.utils import timezone
+        
+        # Create Airtel provider and two active requests
+        airtel = TSPProvider.objects.create(name="Bharti Airtel", code="AIRTEL", contact_email="airtel@test.com", mobile_number="7353224355")
+        
+        # Request 1: has forwarded_at = None (manually approved under old code or legacy)
+        req_legacy = Request.objects.create(
+            mobile_number="9999988881",
+            tsp=airtel,
+            reason="Legacy request",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            forwarded_at=None
+        )
+        
+        # Request 2: recently forwarded (has non-null forwarded_at)
+        req_recent = Request.objects.create(
+            mobile_number="9999988882",
+            tsp=airtel,
+            reason="Recent request",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            forwarded_at=timezone.now()
+        )
+        
+        # Simulate response with no ticket ID or phone number
+        success = process_single_received_sms(
+            sms_id="sms_fallback_nulls_last",
+            sender="7353224355",
+            message="Active in Karnataka",
+            received_at_str="2026-06-30T12:00:00Z"
+        )
+        self.assertTrue(success)
+        
+        # Request with non-null forwarded_at (req_recent) must be matched and updated first!
+        req_recent.refresh_from_db()
+        self.assertEqual(req_recent.status, RequestStatus.TSP_RESPONDED)
+        
+        # Request with null forwarded_at (req_legacy) must remain unchanged
+        req_legacy.refresh_from_db()
+        self.assertEqual(req_legacy.status, RequestStatus.FORWARDED)
+
+
 
 
 
