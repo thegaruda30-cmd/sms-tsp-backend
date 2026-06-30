@@ -657,6 +657,34 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
 
     tsp_provider = req.tsp
 
+    # Check current system settings dynamically at response receipt time
+    from api.models import SystemSetting, PermissionSetting
+    absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
+    is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
+
+    direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
+    is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
+
+    admin_status_setting = SystemSetting.objects.filter(key='admin_status').first()
+    admin_status = admin_status_setting.value.lower() if admin_status_setting else 'online'
+    is_admin_offline = admin_status in ['offline', 'away']
+
+    has_direct_permission = False
+    try:
+        perm = PermissionSetting.objects.get(officer=req.officer)
+        has_direct_permission = perm.direct_forward_allowed
+    except Exception:
+        pass
+
+    should_auto_complete = (
+        req.is_absent_approved or 
+        req.is_direct_forwarded or 
+        req.is_auto_approved or 
+        (is_absent_mode_on and is_admin_offline) or 
+        is_direct_forward_on or 
+        has_direct_permission
+    )
+
     # Prevent processing duplicate responses/acknowledgments for the same request
     from api.models import TSPResponse
     msg_clean = message.strip()
@@ -763,7 +791,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
                 )
         return True
 
-    if is_acknowledgment_message(message):
+    if is_acknowledgment_message(message) and not should_auto_complete:
         # Acknowledgment message received. Update request status to PROCESSING and admin status.
         req.status = RequestStatus.PROCESSING
         req.admin_status = 'Acknowledgment Received'
@@ -861,29 +889,7 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
         req.response = message
     req.response_date = timezone.now()
 
-    # Check current system settings dynamically at response receipt time
-    from api.models import SystemSetting, PermissionSetting
-    absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
-    is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
 
-    direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
-    is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
-
-    has_direct_permission = False
-    try:
-        perm = PermissionSetting.objects.get(officer=req.officer)
-        has_direct_permission = perm.direct_forward_allowed
-    except Exception:
-        pass
-
-    should_auto_complete = (
-        req.is_absent_approved or 
-        req.is_direct_forwarded or 
-        req.is_auto_approved or 
-        is_absent_mode_on or 
-        is_direct_forward_on or 
-        has_direct_permission
-    )
 
     if should_auto_complete:
         req.status = RequestStatus.COMPLETED
@@ -1642,7 +1648,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         is_admin_offline = admin_status in ['offline', 'away']
         
         should_absent_approve = False
-        if is_absent_mode_on:
+        if is_absent_mode_on and is_admin_offline:
             if absent_mode_type == 'all':
                 should_absent_approve = True
             elif absent_mode_type == 'specific':
@@ -2257,6 +2263,10 @@ class RequestViewSet(viewsets.ModelViewSet):
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
         is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
 
+        admin_status_setting = SystemSetting.objects.filter(key='admin_status').first()
+        admin_status = admin_status_setting.value.lower() if admin_status_setting else 'online'
+        is_admin_offline = admin_status in ['offline', 'away']
+
         has_direct_permission = False
         try:
             perm = PermissionSetting.objects.get(officer=req.officer)
@@ -2268,7 +2278,7 @@ class RequestViewSet(viewsets.ModelViewSet):
             req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            is_absent_mode_on or 
+            (is_absent_mode_on and is_admin_offline) or 
             is_direct_forward_on or 
             has_direct_permission
         )
@@ -2287,7 +2297,7 @@ class RequestViewSet(viewsets.ModelViewSet):
         
         # Guard: prevent TSP from reverting already-completed/closed requests, but still record their response details.
         if req.status not in [RequestStatus.COMPLETED, RequestStatus.CLOSED]:
-            if is_ack:
+            if is_ack and not should_auto_complete:
                 req.status = RequestStatus.PROCESSING
                 req.admin_status = 'Acknowledgment Received'
             else:
@@ -2760,6 +2770,10 @@ class RequestViewSet(viewsets.ModelViewSet):
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
         is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
 
+        admin_status_setting = SystemSetting.objects.filter(key='admin_status').first()
+        admin_status = admin_status_setting.value.lower() if admin_status_setting else 'online'
+        is_admin_offline = admin_status in ['offline', 'away']
+
         has_direct_permission = False
         try:
             perm = PermissionSetting.objects.get(officer=req.officer)
@@ -2771,7 +2785,7 @@ class RequestViewSet(viewsets.ModelViewSet):
             req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            is_absent_mode_on or 
+            (is_absent_mode_on and is_admin_offline) or 
             is_direct_forward_on or 
             has_direct_permission
         )

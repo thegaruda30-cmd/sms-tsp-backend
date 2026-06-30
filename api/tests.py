@@ -492,6 +492,41 @@ class SMSSystemTests(APITestCase):
         self.assertIsNotNone(tsp_resp)
         self.assertEqual(tsp_resp.status, 'Sent to Officer')
 
+    def test_process_single_received_sms_acknowledgment_auto_completes(self):
+        from api.views import process_single_received_sms
+        from api.models import TSPResponse
+        
+        # Create a forwarded request with is_auto_approved = True (direct send)
+        bsnl = TSPProvider.objects.create(name="BSNL", code="BSNL", contact_email="bsnl@test.com", mobile_number="7353224353")
+        req_bsnl = Request.objects.create(
+            mobile_number="9999955555",
+            tsp=bsnl,
+            reason="Test Acknowledgment Auto-Complete",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            is_auto_approved=True
+        )
+        
+        # Simulate an acknowledgment SMS (e.g. "Okay 👍")
+        success = process_single_received_sms(
+            sms_id="sms_test_ack_auto_complete",
+            sender="7353224353",
+            message="Okay 👍",
+            received_at_str="2026-06-13T10:00:00Z"
+        )
+        self.assertTrue(success)
+        
+        # Verify the request status changed to COMPLETED (not PROCESSING!)
+        req_bsnl.refresh_from_db()
+        self.assertEqual(req_bsnl.status, RequestStatus.COMPLETED)
+        self.assertEqual(req_bsnl.admin_status, 'Completed')
+        
+        # Verify TSPResponse is created with status 'Sent to Officer'
+        tsp_resp = TSPResponse.objects.filter(request=req_bsnl).first()
+        self.assertIsNotNone(tsp_resp)
+        self.assertEqual(tsp_resp.status, 'Sent to Officer')
+
+
 
 
 
