@@ -46,6 +46,8 @@ class User(AbstractUser):
         blank=True,
         related_name='representatives'
     )
+    mobile_number = models.CharField(max_length=15, blank=True, default='')
+    station_name = models.CharField(max_length=150, blank=True, default='')
 
     def __str__(self):
         return f"{self.username} ({self.role})"

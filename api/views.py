@@ -3659,6 +3659,8 @@ class FieldOfficerListView(views.APIView):
         username = request.data.get('username')
         first_name = request.data.get('first_name', '')
         last_name = request.data.get('last_name', '')
+        mobile_number = request.data.get('mobile_number', '')
+        station_name = request.data.get('station_name', '')
         
         if not email or not password:
             return Response({"detail": "Email and password are required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -3666,14 +3668,12 @@ class FieldOfficerListView(views.APIView):
         if not username:
             username = email.split('@')[0]
             
-        # Ensure username is unique
-        base_username = username
-        import random
-        while User.objects.filter(username=username).exists():
-            username = f"{base_username}_{random.randint(100, 999)}"
+        # Verify username uniqueness
+        if User.objects.filter(username=username).exists():
+            return Response({"detail": "Username is already taken. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
             
         if User.objects.filter(email=email).exists():
-            return Response({"detail": "User with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Email is already registered. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
             
         # Create user
         officer = User.objects.create_user(
@@ -3682,7 +3682,9 @@ class FieldOfficerListView(views.APIView):
             password=password,
             first_name=first_name,
             last_name=last_name,
-            role=UserRole.OFFICER
+            role=UserRole.OFFICER,
+            mobile_number=mobile_number,
+            station_name=station_name
         )
         
         # Create permission setting

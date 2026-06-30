@@ -118,14 +118,18 @@ def sync_user(django_user) -> str:
     email = django_user.email or f"{django_user.username}@local"
     role = _ROLE.get(str(django_user.role), "Officer")
     last_login = django_user.last_login
+    mobile_number = getattr(django_user, 'mobile_number', '')
+    station_name = getattr(django_user, 'station_name', '')
 
     sql = """
         INSERT INTO public.users
-            (id, full_name, email, mobile_number, role, is_active, last_login, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            (id, full_name, email, mobile_number, station_name, role, is_active, last_login, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         ON CONFLICT (id) DO UPDATE SET
             full_name    = EXCLUDED.full_name,
             email        = EXCLUDED.email,
+            mobile_number = EXCLUDED.mobile_number,
+            station_name  = EXCLUDED.station_name,
             role         = EXCLUDED.role,
             is_active    = EXCLUDED.is_active,
             last_login   = EXCLUDED.last_login,
@@ -135,7 +139,7 @@ def sync_user(django_user) -> str:
     try:
         with c:
             with c.cursor() as cur:
-                cur.execute(sql, (uid, full_name, email, "", role, django_user.is_active, last_login))
+                cur.execute(sql, (uid, full_name, email, mobile_number, station_name, role, django_user.is_active, last_login))
     finally:
         c.close()
     return uid

@@ -32,7 +32,7 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'role', 'tsp_provider', 'tsp_provider_details',
             'direct_forward_allowed', 'bypass_daily_limit', 'bypass_requested',
             'extra_requests_limit', 'bypass_expiry_date', 'is_bypass_active',
-            'first_name', 'last_name'
+            'first_name', 'last_name', 'mobile_number', 'station_name'
         ]
  
     def get_direct_forward_allowed(self, obj):

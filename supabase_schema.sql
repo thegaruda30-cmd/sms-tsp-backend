@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     full_name       TEXT NOT NULL,
     email           TEXT NOT NULL UNIQUE,
     mobile_number   TEXT,
+    station_name    TEXT,
     role            TEXT NOT NULL CHECK (role IN ('Officer', 'Admin', 'TSP')),
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     last_login      TIMESTAMPTZ,
