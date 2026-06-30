@@ -1175,20 +1175,20 @@ def get_dashboard_data(user, request):
     tsps_qs = TSPProvider.objects.all()
     tsps_data = TSPProviderSerializer(tsps_qs, many=True).data
 
-    # --- Requests (role-filtered) ---
+    # --- Requests (role-filtered, no heavy prefetch for list view) ---
     req_qs = Request.objects.select_related(
-        'tsp', 'officer', 'officer__permission'
-    ).prefetch_related('status_logs', 'sms_logs', 'tsp_responses')
+        'tsp', 'officer'
+    ).order_by('-created_at')
 
     if user.role == UserRole.OFFICER:
-        req_qs = req_qs.filter(officer=user).order_by('-created_at')
+        req_qs = req_qs.filter(officer=user)[:100]
     elif user.role == UserRole.TSP:
         if user.tsp_provider:
-            req_qs = req_qs.filter(tsp=user.tsp_provider).order_by('-created_at')
+            req_qs = req_qs.filter(tsp=user.tsp_provider)[:100]
         else:
             req_qs = req_qs.none()
-    else:
-        req_qs = req_qs.order_by('-created_at')
+    else:  # ADMIN
+        req_qs = req_qs[:50]  # Latest 50 for admin dashboard — fast load
 
     requests_data = RequestSerializer(req_qs, many=True, context={'request': request}).data
 
@@ -1295,10 +1295,10 @@ def get_dashboard_data(user, request):
         officers_qs = User.objects.filter(role=UserRole.OFFICER).select_related('permission')
         field_officers_data = UserSerializer(officers_qs, many=True).data
 
-        activity_logs_qs = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:100]
+        activity_logs_qs = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:50]
         activity_logs_data = ActivityLogSerializer(activity_logs_qs, many=True).data
 
-        sms_logs_qs = SMSLog.objects.select_related('request').order_by('-timestamp')[:100]
+        sms_logs_qs = SMSLog.objects.select_related('request').order_by('-timestamp')[:50]
         sms_logs_data = SMSLogSerializer(sms_logs_qs, many=True).data
 
         tsp_settings_qs = TspSetting.objects.all()
