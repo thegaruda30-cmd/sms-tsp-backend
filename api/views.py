@@ -662,6 +662,9 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
     absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
     is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
 
+    absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
+    absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
+
     direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
     is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
 
@@ -676,11 +679,19 @@ def process_single_received_sms(sms_id, sender, message, received_at_str):
     except Exception:
         pass
 
+    should_absent_complete = False
+    if req.is_absent_approved:
+        should_absent_complete = True
+    elif is_absent_mode_on:
+        if absent_mode_type == 'all':
+            should_absent_complete = True
+        elif absent_mode_type == 'specific':
+            should_absent_complete = has_direct_permission
+
     should_auto_complete = (
-        req.is_absent_approved or 
         req.is_direct_forwarded or 
         req.is_auto_approved or 
-        is_absent_mode_on or 
+        should_absent_complete or 
         is_direct_forward_on or 
         has_direct_permission
     )
@@ -2260,6 +2271,9 @@ class RequestViewSet(viewsets.ModelViewSet):
         absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
         is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
 
+        absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
+        absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
+
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
         is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
 
@@ -2274,11 +2288,19 @@ class RequestViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
+        should_absent_complete = False
+        if req.is_absent_approved:
+            should_absent_complete = True
+        elif is_absent_mode_on:
+            if absent_mode_type == 'all':
+                should_absent_complete = True
+            elif absent_mode_type == 'specific':
+                should_absent_complete = has_direct_permission
+
         should_auto_complete = (
-            req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            is_absent_mode_on or 
+            should_absent_complete or 
             is_direct_forward_on or 
             has_direct_permission
         )
@@ -2767,6 +2789,9 @@ class RequestViewSet(viewsets.ModelViewSet):
         absent_mode_setting = SystemSetting.objects.filter(key='admin_absent_mode').first()
         is_absent_mode_on = absent_mode_setting.value.lower() == 'true' if absent_mode_setting else False
 
+        absent_mode_type_setting = SystemSetting.objects.filter(key='admin_absent_mode_type').first()
+        absent_mode_type = absent_mode_type_setting.value.lower() if absent_mode_type_setting else 'all'
+
         direct_forward_setting = SystemSetting.objects.filter(key='allow_direct_forwarding').first()
         is_direct_forward_on = direct_forward_setting.value.lower() == 'true' if direct_forward_setting else False
 
@@ -2781,11 +2806,19 @@ class RequestViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
+        should_absent_complete = False
+        if req.is_absent_approved:
+            should_absent_complete = True
+        elif is_absent_mode_on:
+            if absent_mode_type == 'all':
+                should_absent_complete = True
+            elif absent_mode_type == 'specific':
+                should_absent_complete = has_direct_permission
+
         should_auto_complete = (
-            req.is_absent_approved or 
             req.is_direct_forwarded or 
             req.is_auto_approved or 
-            is_absent_mode_on or 
+            should_absent_complete or 
             is_direct_forward_on or 
             has_direct_permission
         )

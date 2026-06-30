@@ -526,6 +526,64 @@ class SMSSystemTests(APITestCase):
         self.assertIsNotNone(tsp_resp)
         self.assertEqual(tsp_resp.status, 'Sent to Officer')
 
+    def test_process_single_received_sms_specific_officers_policy(self):
+        from api.views import process_single_received_sms
+        from api.models import TSPResponse, SystemSetting, PermissionSetting
+        
+        # Enable absent mode with specific officers policy
+        SystemSetting.objects.update_or_create(key='admin_absent_mode', defaults={'value': 'true'})
+        SystemSetting.objects.update_or_create(key='admin_absent_mode_type', defaults={'value': 'specific'})
+        
+        # 1. Create a request for an officer WITH direct forward permission
+        PermissionSetting.objects.update_or_create(officer=self.officer, defaults={'direct_forward_allowed': True})
+        bsnl = TSPProvider.objects.create(name="BSNL", code="BSNL", contact_email="bsnl@test.com", mobile_number="7353224354")
+        req_allowed = Request.objects.create(
+            mobile_number="9999966666",
+            tsp=bsnl,
+            reason="Test Specific Allowed",
+            officer=self.officer,
+            status=RequestStatus.FORWARDED,
+            is_absent_approved=True
+        )
+        
+        # Simulate response for allowed officer
+        success1 = process_single_received_sms(
+            sms_id="sms_test_allowed",
+            sender="7353224354",
+            message="BSNL Status: Active\nCircle: Karnataka\nActivation Date: 2026-06-13",
+            received_at_str="2026-06-13T10:00:00Z"
+        )
+        self.assertTrue(success1)
+        req_allowed.refresh_from_db()
+        self.assertEqual(req_allowed.status, RequestStatus.COMPLETED)
+        
+        # 2. Create another request for a DIFFERENT officer WITHOUT direct forward permission
+        other_user = User.objects.create_user(username="other_officer", password="password")
+        PermissionSetting.objects.update_or_create(officer=other_user, defaults={'direct_forward_allowed': False})
+        
+        req_disallowed = Request.objects.create(
+            mobile_number="9999977777",
+            tsp=bsnl,
+            reason="Test Specific Disallowed",
+            officer=other_user,
+            status=RequestStatus.FORWARDED,
+            is_absent_approved=False
+        )
+        
+        # Simulate response for disallowed officer
+        success2 = process_single_received_sms(
+            sms_id="sms_test_disallowed",
+            sender="7353224354",
+            message="BSNL Status: Active\nCircle: Karnataka\nActivation Date: 2026-06-13",
+            received_at_str="2026-06-13T10:00:00Z"
+        )
+        self.assertTrue(success2)
+        req_disallowed.refresh_from_db()
+        
+        # Disallowed officer response must go to TSP_RESPONDED (ready for review), not COMPLETED!
+        self.assertEqual(req_disallowed.status, RequestStatus.TSP_RESPONDED)
+
+
 
 
 
