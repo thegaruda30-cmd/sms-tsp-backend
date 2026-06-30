@@ -3651,47 +3651,54 @@ class FieldOfficerListView(views.APIView):
         return Response(serializer.data)
 
     def post(self, request):
-        if request.user.role != UserRole.ADMIN:
-            return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
-        
-        username = request.data.get('username')
-        password = request.data.get('password')
-        first_name = request.data.get('first_name', '')
-        last_name = request.data.get('last_name', '')
-        mobile_number = request.data.get('mobile_number', '')
-        station_name = request.data.get('station_name', '')
-        
-        if not username or not password:
-            return Response({"detail": "Username and password are required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if request.user.role != UserRole.ADMIN:
+                return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
             
-        email = f"{username}@smstsp.com"
-        
-        # Verify username uniqueness
-        if User.objects.filter(username=username).exists():
-            return Response({"detail": "Username is already taken. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
+            username = request.data.get('username')
+            password = request.data.get('password')
+            first_name = request.data.get('first_name', '')
+            last_name = request.data.get('last_name', '')
+            mobile_number = request.data.get('mobile_number', '')
+            station_name = request.data.get('station_name', '')
             
-        # Create user
-        officer = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password,
-            first_name=first_name,
-            last_name=last_name,
-            role=UserRole.OFFICER,
-            mobile_number=mobile_number,
-            station_name=station_name
-        )
-        
-        # Create permission setting
-        PermissionSetting.objects.get_or_create(officer=officer)
-        
-        log_activity(
-            "Field Officer Created", 
-            request.user, 
-            details=f"Created Field Officer: {officer.username} ({officer.email})"
-        )
-        
-        return Response(UserSerializer(officer).data, status=status.HTTP_201_CREATED)
+            if not username or not password:
+                return Response({"detail": "Username and password are required."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            email = f"{username}@smstsp.com"
+            
+            # Verify username uniqueness
+            if User.objects.filter(username=username).exists():
+                return Response({"detail": "Username is already taken. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Create user
+            officer = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                role=UserRole.OFFICER,
+                mobile_number=mobile_number,
+                station_name=station_name
+            )
+            
+            # Create permission setting
+            PermissionSetting.objects.get_or_create(officer=officer)
+            
+            log_activity(
+                "Field Officer Created", 
+                request.user, 
+                details=f"Created Field Officer: {officer.username} ({officer.email})"
+            )
+            
+            return Response(UserSerializer(officer).data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            import traceback
+            return Response({
+                "detail": f"CRASH: {str(e)}", 
+                "traceback": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ChatMessageViewSet(viewsets.ModelViewSet):
     queryset = ChatMessage.objects.all().order_by('timestamp')
