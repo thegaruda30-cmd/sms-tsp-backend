@@ -3654,26 +3654,21 @@ class FieldOfficerListView(views.APIView):
         if request.user.role != UserRole.ADMIN:
             return Response({"detail": "Access Denied"}, status=status.HTTP_403_FORBIDDEN)
         
-        email = request.data.get('email')
-        password = request.data.get('password')
         username = request.data.get('username')
+        password = request.data.get('password')
         first_name = request.data.get('first_name', '')
         last_name = request.data.get('last_name', '')
         mobile_number = request.data.get('mobile_number', '')
         station_name = request.data.get('station_name', '')
         
-        if not email or not password:
-            return Response({"detail": "Email and password are required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not username or not password:
+            return Response({"detail": "Username and password are required."}, status=status.HTTP_400_BAD_REQUEST)
             
-        if not username:
-            username = email.split('@')[0]
-            
+        email = f"{username}@smstsp.com"
+        
         # Verify username uniqueness
         if User.objects.filter(username=username).exists():
             return Response({"detail": "Username is already taken. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
-            
-        if User.objects.filter(email=email).exists():
-            return Response({"detail": "Email is already registered. Please choose another."}, status=status.HTTP_400_BAD_REQUEST)
             
         # Create user
         officer = User.objects.create_user(
