@@ -583,6 +583,44 @@ class SMSSystemTests(APITestCase):
         # Disallowed officer response must go to TSP_RESPONDED (ready for review), not COMPLETED!
         self.assertEqual(req_disallowed.status, RequestStatus.TSP_RESPONDED)
 
+    def test_build_tsp_forward_sms_custom_template_substitutions(self):
+        from api.views import build_tsp_forward_sms
+        from api.models import TspSetting
+        
+        # Airtel provider and request
+        airtel = TSPProvider.objects.create(name="Bharti Airtel", code="AIRTEL", contact_email="airtel@test.com", mobile_number="9876543210")
+        req = Request.objects.create(
+            mobile_number="5852369000",
+            tsp=airtel,
+            reason="Test Template Substitutions",
+            officer=self.officer
+        )
+        
+        # Scenario 1: Configured template with <91Number> placeholder
+        TspSetting.objects.update_or_create(
+            tsp_name="Airtel",
+            defaults={'sms_template': 'Loc<91Number>'}
+        )
+        msg, _ = build_tsp_forward_sms(req)
+        self.assertEqual(msg, "Loc915852369000")
+        
+        # Scenario 2: Configured template with <91 Number> placeholder
+        TspSetting.objects.update_or_create(
+            tsp_name="Airtel",
+            defaults={'sms_template': 'Loc <91 Number>'}
+        )
+        msg, _ = build_tsp_forward_sms(req)
+        self.assertEqual(msg, "Loc 915852369000")
+
+        # Scenario 3: Configured template with <Number> placeholder
+        TspSetting.objects.update_or_create(
+            tsp_name="Airtel",
+            defaults={'sms_template': 'Loc <Number>'}
+        )
+        msg, _ = build_tsp_forward_sms(req)
+        self.assertEqual(msg, "Loc 5852369000")
+
+
 
 
 

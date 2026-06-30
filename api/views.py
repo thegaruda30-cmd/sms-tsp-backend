@@ -1502,7 +1502,13 @@ def build_tsp_forward_sms(req):
         
     if sms_template:
         import re
-        sms_msg = re.sub(r'<number>', req.mobile_number, sms_template, flags=re.IGNORECASE)
+        # Strip any country code from the suspect number to avoid duplication (e.g. 9191)
+        mobile_10 = req.mobile_number[-10:]
+        
+        # Replace <91Number>, <91 Number>, <91_Number>, <91-Number> (case-insensitive)
+        sms_msg = re.sub(r'<91\s*[-_]?\s*Number>', '91' + mobile_10, sms_template, flags=re.IGNORECASE)
+        # Replace <Number> (case-insensitive)
+        sms_msg = re.sub(r'<Number>', req.mobile_number, sms_msg, flags=re.IGNORECASE)
         return sms_msg, forward_number
         
     return build_forward_sms_message(req), forward_number
