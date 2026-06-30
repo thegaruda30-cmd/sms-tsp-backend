@@ -35,48 +35,44 @@ class UserSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'mobile_number', 'station_name'
         ]
  
-    def get_direct_forward_allowed(self, obj):
+    def _get_perm(self, obj):
         try:
-            return obj.permission.direct_forward_allowed
-        except AttributeError:
-            return False
- 
-    def get_bypass_daily_limit(self, obj):
-        try:
-            return obj.permission.bypass_daily_limit
-        except AttributeError:
-            return False
-
-    def get_bypass_requested(self, obj):
-        try:
-            return obj.permission.bypass_requested
-        except AttributeError:
-            return False
-
-    def get_extra_requests_limit(self, obj):
-        try:
-            return obj.permission.extra_requests_limit
-        except AttributeError:
-            return 0
-
-    def get_bypass_expiry_date(self, obj):
-        try:
-            val = obj.permission.bypass_expiry_date
-            return val.isoformat() if val else None
-        except AttributeError:
+            return obj.permission
+        except Exception:
             return None
 
+    def get_direct_forward_allowed(self, obj):
+        perm = self._get_perm(obj)
+        return perm.direct_forward_allowed if perm else False
+ 
+    def get_bypass_daily_limit(self, obj):
+        perm = self._get_perm(obj)
+        return perm.bypass_daily_limit if perm else False
+
+    def get_bypass_requested(self, obj):
+        perm = self._get_perm(obj)
+        return perm.bypass_requested if perm else False
+
+    def get_extra_requests_limit(self, obj):
+        perm = self._get_perm(obj)
+        return perm.extra_requests_limit if perm else 0
+
+    def get_bypass_expiry_date(self, obj):
+        perm = self._get_perm(obj)
+        if perm:
+            val = perm.bypass_expiry_date
+            return val.isoformat() if val else None
+        return None
+
     def get_is_bypass_active(self, obj):
-        try:
-            perm = obj.permission
+        perm = self._get_perm(obj)
+        if perm:
             if perm.bypass_daily_limit:
                 if perm.bypass_expiry_date:
                     from django.utils import timezone
                     return perm.bypass_expiry_date >= timezone.now()
                 return True
-            return False
-        except AttributeError:
-            return False
+        return False
 
 class RequestStatusLogSerializer(serializers.ModelSerializer):
     changed_by_name = serializers.CharField(source='changed_by.username', read_only=True)
