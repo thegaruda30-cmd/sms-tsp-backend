@@ -120,12 +120,17 @@ else:
             'NAME': os.environ.get('SUPABASE_DB_NAME', 'postgres'),
             'USER': os.environ.get('SUPABASE_DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('SUPABASE_DB_PASSWORD', 'smsforward@system'),
-            # Keep connections alive for 60s to avoid paying a new SSL handshake on every request
-            'CONN_MAX_AGE': 60,
+            # Keep connections alive for 5 minutes — avoids SSL re-handshake on every request
+            'CONN_MAX_AGE': 300,
             'CONN_HEALTH_CHECKS': True,
             'OPTIONS': {
                 'sslmode': 'require',
-                'connect_timeout': 5,
+                'connect_timeout': 8,
+                # Hint to psycopg2 to keep TCP connection alive
+                'keepalives': 1,
+                'keepalives_idle': 60,
+                'keepalives_interval': 10,
+                'keepalives_count': 5,
             }
         },
         'sqlite': {

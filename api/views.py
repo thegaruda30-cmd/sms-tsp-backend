@@ -1163,7 +1163,7 @@ def send_textbee_sms(to_number, message_body):
         print(f"TextBee SMS failed to send to {formatted_to}: {str(e)}")
         return False
 
-def get_dashboard_data(user, request):
+def get_dashboard_data(user, request, login_mode=False):
     request.user = user
     # --- Profile ---
     profile_data = UserSerializer(user).data
@@ -1171,8 +1171,11 @@ def get_dashboard_data(user, request):
         setting = SystemSetting.objects.filter(key='admin_mobile_number').first()
         profile_data['phone_number'] = setting.value if setting else '9844281875'
 
-    # --- TSPs ---
-    tsps_qs = TSPProvider.objects.all()
+    # --- TSPs (lightweight: only essential fields) ---
+    tsps_qs = TSPProvider.objects.all().only(
+        'id', 'name', 'code', 'contact_email', 'mobile_number',
+        'inbound_number', 'is_default', 'is_active', 'sms_template'
+    )
     tsps_data = TSPProviderSerializer(tsps_qs, many=True).data
 
     # --- Requests (role-filtered, no heavy prefetch for list view) ---
@@ -1188,12 +1191,15 @@ def get_dashboard_data(user, request):
         else:
             req_qs = req_qs.none()
     else:  # ADMIN
-        req_qs = req_qs[:50]  # Latest 50 for admin dashboard — fast load
+        # On login: load only latest 25 for fast response; full 50 via background /dashboard/
+        limit = 25 if login_mode else 50
+        req_qs = req_qs[:limit]
 
     requests_data = RequestSerializer(req_qs, many=True, context={'request': request}).data
 
-    # --- Notifications (last 50 only) ---
-    notifications_qs = SystemNotification.objects.filter(user=user).order_by('-created_at')[:50]
+    # --- Notifications (last 30 on login, 50 on full refresh) ---
+    notif_limit = 30 if login_mode else 50
+    notifications_qs = SystemNotification.objects.filter(user=user).order_by('-created_at')[:notif_limit]
     notifications_data = SystemNotificationSerializer(notifications_qs, many=True).data
 
     # --- Role-specific stats ---
@@ -1216,8 +1222,12 @@ def get_dashboard_data(user, request):
         )
         tsp_stats_agg = list(all_req_qs.values('tsp__name').annotate(count=Count('id')).order_by('-count'))
         officer_stats_agg = list(all_req_qs.values('officer__username').annotate(count=Count('id')).order_by('-count'))
-        recent_activities = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:10]
-        recent_activities_data = ActivityLogSerializer(recent_activities, many=True).data
+        # On login mode: skip recent_activities extra query (saves ~100ms on Supabase)
+        if login_mode:
+            recent_activities_data = []
+        else:
+            recent_activities = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:10]
+            recent_activities_data = ActivityLogSerializer(recent_activities, many=True).data
         settings_dict = {s.key: s.value for s in SystemSetting.objects.filter(key__in=[
             'auto_approval_mode', 'auto_routing_mode', 'admin_absent_mode',
             'admin_absent_mode_type', 'allow_direct_forwarding', 'admin_status', 'admin_mobile_number'
@@ -1285,7 +1295,7 @@ def get_dashboard_data(user, request):
             'admin_user_id': admin_user.id if admin_user else None,
         }
 
-    # --- Admin-only heavy data ---
+    # --- Admin-only heavy data (skipped on login for speed) ---
     field_officers_data = []
     activity_logs_data = []
     sms_logs_data = []
@@ -1295,11 +1305,13 @@ def get_dashboard_data(user, request):
         officers_qs = User.objects.filter(role=UserRole.OFFICER).select_related('permission')
         field_officers_data = UserSerializer(officers_qs, many=True).data
 
-        activity_logs_qs = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:50]
-        activity_logs_data = ActivityLogSerializer(activity_logs_qs, many=True).data
+        if not login_mode:
+            # Only loaded on full dashboard refresh, not on login
+            activity_logs_qs = ActivityLog.objects.all().select_related('user', 'request').order_by('-timestamp')[:50]
+            activity_logs_data = ActivityLogSerializer(activity_logs_qs, many=True).data
 
-        sms_logs_qs = SMSLog.objects.select_related('request').order_by('-timestamp')[:50]
-        sms_logs_data = SMSLogSerializer(sms_logs_qs, many=True).data
+            sms_logs_qs = SMSLog.objects.select_related('request').order_by('-timestamp')[:50]
+            sms_logs_data = SMSLogSerializer(sms_logs_qs, many=True).data
 
         tsp_settings_qs = TspSetting.objects.all()
         tsp_settings_data = TspSettingSerializer(tsp_settings_qs, many=True).data
@@ -1360,11 +1372,16 @@ class CustomAuthToken(ObtainAuthToken):
         from django.contrib.auth.signals import user_logged_in
         user_logged_in.send(sender=user.__class__, request=request, user=user)
         
-        # Log login history to legacy activity logs
-        log_activity("User Login", user, details=f"Logged in from IP: {request.META.get('REMOTE_ADDR')}")
+        # Log login activity in a background thread to avoid blocking the response
+        def _log_login():
+            try:
+                log_activity("User Login", user, details=f"Logged in from IP: {request.META.get('REMOTE_ADDR')}")
+            except Exception:
+                pass
+        threading.Thread(target=_log_login, daemon=True).start()
         
-        # Compile dashboard data for instant login transition
-        dashboard_data = get_dashboard_data(user, request)
+        # Compile lean dashboard data for instant login transition (login_mode=True skips heavy queries)
+        dashboard_data = get_dashboard_data(user, request, login_mode=True)
         
         return Response({
             'token': token.key,

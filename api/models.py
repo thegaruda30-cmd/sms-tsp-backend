@@ -88,6 +88,16 @@ class Request(models.Model):
             self.ticket_id = f"TSPTKT-{self.id:06d}"
             super().save(update_fields=['ticket_id'])
 
+    class Meta:
+        indexes = [
+            # Speed up officer dashboard and admin list queries
+            models.Index(fields=['officer', '-created_at'], name='req_officer_created_idx'),
+            # Speed up TSP dashboard queries
+            models.Index(fields=['tsp', '-created_at'], name='req_tsp_created_idx'),
+            # Speed up status-filtered queries (stats aggregation)
+            models.Index(fields=['status'], name='req_status_idx'),
+        ]
+
     @property
     def tsp_response(self):
         resps = list(self.tsp_responses.order_by('-id'))
@@ -171,6 +181,12 @@ class SystemNotification(models.Model):
     def __str__(self):
         return f"Notification to {self.user.username}: {self.title}"
 
+    class Meta:
+        indexes = [
+            # Speed up per-user notification queries
+            models.Index(fields=['user', '-created_at'], name='notif_user_created_idx'),
+        ]
+
 class ActivityLog(models.Model):
     action = models.CharField(max_length=100)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -180,6 +196,12 @@ class ActivityLog(models.Model):
 
     def __str__(self):
         return f"Activity: {self.action} by {self.user.username if self.user else 'System'}"
+
+    class Meta:
+        indexes = [
+            # Speed up activity log timeline queries
+            models.Index(fields=['-timestamp'], name='actlog_timestamp_idx'),
+        ]
 
 class SystemSetting(models.Model):
     key = models.CharField(max_length=50, unique=True)
