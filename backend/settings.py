@@ -123,6 +123,11 @@ else:
             # Keep connections alive for 5 minutes — avoids SSL re-handshake on every request
             'CONN_MAX_AGE': 300,
             'CONN_HEALTH_CHECKS': True,
+            'pool': {
+                'min_size': 5,
+                'max_size': 40,
+                'max_lifetime': 600,
+            },
             'OPTIONS': {
                 'sslmode': 'require',
                 'connect_timeout': 8,
