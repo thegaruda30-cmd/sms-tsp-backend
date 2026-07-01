@@ -3665,7 +3665,9 @@ class FieldOfficerListView(views.APIView):
             if not username or not password:
                 return Response({"detail": "Username and password are required."}, status=status.HTTP_400_BAD_REQUEST)
                 
-            email = f"{username}@smstsp.com"
+            email = request.data.get('email')
+            if not email:
+                email = f"{username}@smstsp.com"
             
             # Verify username uniqueness
             if User.objects.filter(username=username).exists():
