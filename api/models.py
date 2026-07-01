@@ -102,6 +102,12 @@ class Request(models.Model):
 
     @property
     def tsp_response(self):
+        # Avoid database lookup if tsp_responses has been prefetched
+        if hasattr(self, '_prefetched_objects_cache') and 'tsp_responses' in self._prefetched_objects_cache:
+            resps = list(self.tsp_responses.all())
+            if resps:
+                return max(resps, key=lambda x: x.id)
+            return None
         resps = list(self.tsp_responses.order_by('-id'))
         return resps[0] if resps else None
 

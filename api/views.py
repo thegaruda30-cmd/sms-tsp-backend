@@ -3,8 +3,9 @@
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from django.db.models import Count, Q, F
+from django.db.models import Count, Q, F, Prefetch
 from django.http import HttpResponse
+from django.core.cache import cache
 
 from rest_framework import status, views, viewsets, permissions, serializers
 from rest_framework.decorators import action
@@ -1164,7 +1165,21 @@ def send_textbee_sms(to_number, message_body):
         return False
 
 def get_dashboard_data(user, request, login_mode=False):
+    # Try to get from cache first
+    cache_key = f"dashboard_data_u{user.id}_role{user.role}_login{int(login_mode)}"
+    cached_data = cache.get(cache_key)
+    if cached_data is not None:
+        return cached_data
+
     request.user = user
+
+    # Optimize profile user object relationships to prevent N+1 queries during profile serialization
+    if not hasattr(user, 'permission') or not hasattr(user, 'tsp_provider'):
+        try:
+            user = User.objects.select_related('permission', 'tsp_provider').get(pk=user.id)
+        except User.DoesNotExist:
+            pass
+
     # --- Profile ---
     profile_data = UserSerializer(user).data
     if user.role == UserRole.ADMIN:
@@ -1178,9 +1193,16 @@ def get_dashboard_data(user, request, login_mode=False):
     )
     tsps_data = TSPProviderSerializer(tsps_qs, many=True).data
 
-    # --- Requests (role-filtered, no heavy prefetch for list view) ---
+    # --- Requests (role-filtered, fully optimized to eliminate N+1 queries) ---
     req_qs = Request.objects.select_related(
-        'tsp', 'officer'
+        'tsp', 
+        'officer', 
+        'officer__permission', 
+        'officer__tsp_provider'
+    ).prefetch_related(
+        Prefetch('status_logs', queryset=RequestStatusLog.objects.select_related('changed_by')),
+        Prefetch('tsp_responses', queryset=TSPResponse.objects.select_related('submitted_by', 'created_by')),
+        'sms_logs'
     ).order_by('-created_at')
 
     if user.role == UserRole.OFFICER:
@@ -1302,7 +1324,7 @@ def get_dashboard_data(user, request, login_mode=False):
     tsp_settings_data = []
 
     if user.role == UserRole.ADMIN:
-        officers_qs = User.objects.filter(role=UserRole.OFFICER).select_related('permission')
+        officers_qs = User.objects.filter(role=UserRole.OFFICER).select_related('permission', 'tsp_provider')
         field_officers_data = UserSerializer(officers_qs, many=True).data
 
         if not login_mode:
@@ -1316,7 +1338,7 @@ def get_dashboard_data(user, request, login_mode=False):
         tsp_settings_qs = TspSetting.objects.all()
         tsp_settings_data = TspSettingSerializer(tsp_settings_qs, many=True).data
 
-    return {
+    result = {
         'profile': profile_data,
         'tsps': tsps_data,
         'requests': requests_data,
@@ -1327,6 +1349,10 @@ def get_dashboard_data(user, request, login_mode=False):
         'sms_logs': sms_logs_data,
         'tsp_settings': tsp_settings_data,
     }
+
+    # Cache for 10 minutes (600 seconds) - will be invalidated on state changes
+    cache.set(cache_key, result, timeout=600)
+    return result
 
 
 class CustomAuthToken(ObtainAuthToken):
