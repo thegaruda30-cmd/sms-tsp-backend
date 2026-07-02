@@ -666,3 +666,44 @@ def async_sync_tsp_provider_as_setting(provider):
     _async(sync_tsp_provider_as_setting, provider)
 
 
+def sync_password_reset_request(django_prr) -> str:
+    """Upsert a PasswordResetRequest record into public.password_reset_requests on Supabase."""
+    if not django_prr:
+        return ""
+
+    uid = _uid("password_reset_request", django_prr.id)
+
+    sql = """
+        INSERT INTO public.password_reset_requests
+            (id, django_id, username, requested_new_password, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (django_id) DO UPDATE SET
+            username               = EXCLUDED.username,
+            requested_new_password = EXCLUDED.requested_new_password,
+            status                 = EXCLUDED.status,
+            updated_at             = EXCLUDED.updated_at
+    """
+
+    c = _conn()
+    try:
+        with c:
+            with c.cursor() as cur:
+                cur.execute(sql, (
+                    uid,
+                    django_prr.id,
+                    django_prr.username,
+                    django_prr.requested_new_password,
+                    django_prr.status,
+                    django_prr.created_at,
+                    django_prr.updated_at,
+                ))
+    finally:
+        c.close()
+    return uid
+
+
+def async_sync_password_reset_request(prr):
+    _async(sync_password_reset_request, prr)
+
+
+

@@ -38,6 +38,7 @@ from api.supabase_db import (
     async_sync_user, async_save_request, async_save_admin_forward_request,
     async_save_tsp_response, async_save_admin_forward_response, async_log_status,
     async_sync_tsp_setting, async_delete_tsp_setting, async_sync_tsp_provider_as_setting,
+    async_sync_password_reset_request,
 )
 
 # Helper functions for logging and notifications
@@ -4115,19 +4116,32 @@ class PasswordResetRequestView(views.APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Verify the officer actually exists to avoid harvesting usernames
-        if not User.objects.filter(username=username, role=UserRole.OFFICER).exists():
+        # Verify the officer actually exists by searching username, email, mobile, starts-with, or name
+        officer = User.objects.filter(
+            Q(username__iexact=username) |
+            Q(email__iexact=username) |
+            Q(mobile_number=username) |
+            Q(username__istartswith=username) |
+            Q(email__istartswith=username) |
+            Q(first_name__iexact=username),
+            role=UserRole.OFFICER
+        ).first()
+
+        if not officer:
             return Response(
-                {"detail": "No officer account found with that username."},
+                {"detail": "No officer account found with that username, name, or email."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        actual_username = officer.username
+
         # Create (or update an existing Pending one) — only one active request at a time
         obj, created = PasswordResetRequest.objects.update_or_create(
-            username=username,
+            username=actual_username,
             status='Pending',
             defaults={'requested_new_password': new_password},
         )
+        async_sync_password_reset_request(obj)
 
         # Notify all admins
         admins = User.objects.filter(role=UserRole.ADMIN)
@@ -4135,11 +4149,11 @@ class PasswordResetRequestView(views.APIView):
             create_notification(
                 admin,
                 "Password Reset Request",
-                f"Officer '{username}' has requested a password reset. Review in the Admin panel.",
+                f"Officer '{actual_username}' has requested a password reset. Review in the Admin panel.",
             )
 
         return Response(
-            {"detail": "Your password reset request has been sent to the admin."},
+            {"detail": f"Request sent for username '{actual_username}'."},
             status=status.HTTP_201_CREATED,
         )
 
@@ -4197,6 +4211,7 @@ class PasswordResetAdminView(views.APIView):
 
             reset_req.status = 'Approved'
             reset_req.save()
+            async_sync_password_reset_request(reset_req)
 
             create_notification(
                 officer,
@@ -4213,6 +4228,7 @@ class PasswordResetAdminView(views.APIView):
         else:  # reject
             reset_req.status = 'Rejected'
             reset_req.save()
+            async_sync_password_reset_request(reset_req)
 
             try:
                 officer = User.objects.get(username=reset_req.username, role=UserRole.OFFICER)

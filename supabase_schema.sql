@@ -246,3 +246,22 @@ DROP POLICY IF EXISTS "service_role_all_tsp_settings" ON public.tsp_settings;
 CREATE POLICY "service_role_all_tsp_settings" ON public.tsp_settings             FOR ALL USING (TRUE);
 
 
+-- ============================================================
+-- TABLE: password_reset_requests
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.password_reset_requests (
+    id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    django_id              INTEGER UNIQUE,
+    username               TEXT NOT NULL,
+    requested_new_password TEXT NOT NULL,
+    status                 TEXT NOT NULL CHECK (status IN ('Pending', 'Approved', 'Rejected')),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.password_reset_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "service_role_all_prr" ON public.password_reset_requests;
+CREATE POLICY "service_role_all_prr" ON public.password_reset_requests FOR ALL USING (TRUE);
+
+
+
