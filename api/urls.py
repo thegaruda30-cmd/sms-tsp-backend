@@ -7,7 +7,7 @@ from api.views import (
     ActivityLogViewSet, ExportReportView, FieldOfficerListView,
     ChatMessageViewSet, DatabaseBrowserView, TSPResponseViewSet, SMSLogViewSet,
     PollSMSView, TextBeeWebhookView, UserProfileView, TspSettingViewSet,
-    HealthCheckView, DashboardView
+    HealthCheckView, DashboardView, PasswordResetRequestView, PasswordResetAdminView
 )
 
 router = DefaultRouter()
@@ -39,5 +39,7 @@ urlpatterns = [
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     # TextBee webhook — called automatically by TextBee when an SMS arrives (no auth needed)
     path('textbee-webhook/', TextBeeWebhookView.as_view(), name='textbee-webhook'),
+    # Password reset request — officer submits (no auth), admin manages (auth required)
+    path('password-reset-request/', PasswordResetRequestView.as_view(), name='password-reset-request'),
+    path('password-reset-admin/', PasswordResetAdminView.as_view(), name='password-reset-admin'),
 ]
-

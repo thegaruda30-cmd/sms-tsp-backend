@@ -4,7 +4,7 @@ from rest_framework import serializers
 from api.models import (
     User, TSPProvider, Request, RequestStatusLog, TSPResponse, PermissionSetting,
     SystemNotification, ActivityLog, SystemSetting, ChatMessage, SMSLog, TspSetting,
-    UserRole, RequestStatus
+    UserRole, RequestStatus, PasswordResetRequest
 )
 
 class TSPProviderSerializer(serializers.ModelSerializer):
@@ -218,4 +218,12 @@ class TspSettingSerializer(serializers.ModelSerializer):
         model = TspSetting
         fields = ['id', 'tsp_name', 'forward_number', 'sms_template', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class PasswordResetRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PasswordResetRequest
+        fields = ['id', 'username', 'requested_new_password', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
 

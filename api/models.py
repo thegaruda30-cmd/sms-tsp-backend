@@ -258,4 +258,16 @@ class TspSetting(models.Model):
         return f"{self.tsp_name} Setting"
 
 
+class PasswordResetRequest(models.Model):
+    username = models.CharField(max_length=150)
+    requested_new_password = models.CharField(max_length=128)
+    status = models.CharField(max_length=20, default='Pending')  # Pending, Approved, Rejected
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Reset Req for {self.username} ({self.status})"
+
+
+
 

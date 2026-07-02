@@ -25,13 +25,13 @@ from reportlab.lib import colors
 from api.models import (
     User, TSPProvider, Request, RequestStatus, RequestStatusLog,
     TSPResponse, PermissionSetting, SystemNotification, ActivityLog, SystemSetting, UserRole, ChatMessage, SMSLog,
-    AdminForwardRequest, TspSetting
+    AdminForwardRequest, TspSetting, PasswordResetRequest
 )
 from api.serializers import (
     UserSerializer, TSPProviderSerializer, RequestSerializer,
     RequestStatusLogSerializer, TSPResponseSerializer, PermissionSettingSerializer,
     SystemNotificationSerializer, ActivityLogSerializer, ChatMessageSerializer, SMSLogSerializer,
-    TspSettingSerializer
+    TspSettingSerializer, PasswordResetRequestSerializer
 )
 from api.file_db import save_request_to_file, save_chat_to_file, get_db_file_structure, save_response_to_queue
 from api.supabase_db import (
@@ -4091,4 +4091,144 @@ class HealthCheckView(views.APIView):
 
     def get(self, request):
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Password Reset Request — officer submits / admin manages
+# ──────────────────────────────────────────────────────────────
+
+class PasswordResetRequestView(views.APIView):
+    """
+    POST  /api/password-reset-request/
+        No authentication needed — the officer is logged-out when they hit
+        "Forgot password", so they submit their username + desired new password.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        username = (request.data.get('username') or '').strip()
+        new_password = (request.data.get('new_password') or '').strip()
+
+        if not username or not new_password:
+            return Response(
+                {"detail": "username and new_password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Verify the officer actually exists to avoid harvesting usernames
+        if not User.objects.filter(username=username, role=UserRole.OFFICER).exists():
+            return Response(
+                {"detail": "No officer account found with that username."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Create (or update an existing Pending one) — only one active request at a time
+        obj, created = PasswordResetRequest.objects.update_or_create(
+            username=username,
+            status='Pending',
+            defaults={'requested_new_password': new_password},
+        )
+
+        # Notify all admins
+        admins = User.objects.filter(role=UserRole.ADMIN)
+        for admin in admins:
+            create_notification(
+                admin,
+                "Password Reset Request",
+                f"Officer '{username}' has requested a password reset. Review in the Admin panel.",
+            )
+
+        return Response(
+            {"detail": "Your password reset request has been sent to the admin."},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class PasswordResetAdminView(views.APIView):
+    """
+    GET   /api/password-reset-admin/           — list all pending/resolved requests
+    POST  /api/password-reset-admin/           — approve or reject a specific request
+        body: { "request_id": <int>, "action": "approve" | "reject" }
+        If approved, the officer's password is updated to the requested value.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != UserRole.ADMIN:
+            return Response({"detail": "Access Denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = PasswordResetRequest.objects.all().order_by('-created_at')
+        serializer = PasswordResetRequestSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        if request.user.role != UserRole.ADMIN:
+            return Response({"detail": "Access Denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        request_id = request.data.get('request_id')
+        action = (request.data.get('action') or '').lower()  # 'approve' or 'reject'
+
+        if not request_id or action not in ('approve', 'reject'):
+            return Response(
+                {"detail": "request_id and action ('approve'/'reject') are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reset_req = get_object_or_404(PasswordResetRequest, id=request_id)
+
+        if reset_req.status != 'Pending':
+            return Response(
+                {"detail": f"This request is already '{reset_req.status}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action == 'approve':
+            # Actually update the officer's password
+            try:
+                officer = User.objects.get(username=reset_req.username, role=UserRole.OFFICER)
+            except User.DoesNotExist:
+                return Response(
+                    {"detail": "Officer account no longer exists."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            officer.set_password(reset_req.requested_new_password)
+            officer.save()
+
+            reset_req.status = 'Approved'
+            reset_req.save()
+
+            create_notification(
+                officer,
+                "Password Reset Approved",
+                "The admin has approved your password reset request. You may now log in with your new password.",
+            )
+            log_activity(
+                "Password Reset Approved",
+                request.user,
+                details=f"Admin approved password reset for officer '{reset_req.username}'.",
+            )
+            return Response({"detail": f"Password for '{reset_req.username}' has been updated."})
+
+        else:  # reject
+            reset_req.status = 'Rejected'
+            reset_req.save()
+
+            try:
+                officer = User.objects.get(username=reset_req.username, role=UserRole.OFFICER)
+                create_notification(
+                    officer,
+                    "Password Reset Rejected",
+                    "The admin has rejected your password reset request. Contact your admin for assistance.",
+                )
+            except User.DoesNotExist:
+                pass
+
+            log_activity(
+                "Password Reset Rejected",
+                request.user,
+                details=f"Admin rejected password reset request for officer '{reset_req.username}'.",
+            )
+            return Response({"detail": f"Password reset request for '{reset_req.username}' has been rejected."})
+
 
